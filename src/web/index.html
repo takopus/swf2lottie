@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>swf2lottie preview</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="panel">
+        <h1>swf2lottie preview</h1>
+        <div class="controls">
+          <label class="file-button">
+            <input id="file-input" type="file" accept=".swf,application/x-shockwave-flash" />
+            <span>Choose SWF file</span>
+          </label>
+          <button id="convert-button" type="button" disabled>Convert</button>
+        </div>
+        <p id="status" class="status">No file selected.</p>
+        <p id="saved-output" class="saved-output" hidden></p>
+      </section>
+      <section class="preview-panel">
+        <div id="preview" class="preview" aria-label="Lottie preview"></div>
+      </section>
+      <pre id="issues" class="issues" hidden></pre>
+    </main>
+
+    <script src="/vendor/lottie.min.js"></script>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

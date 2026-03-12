@@ -1,0 +1,27 @@
+{
+  "name": "swf2lottie",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Deterministic SWF to Lottie converter for a strict subset of Flash vector timelines.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
+    "preview": "node --import tsx src/server/dev-server.ts",
+    "test": "vitest run",
+    "export:fixtures": "node --import tsx scripts/export-fixtures.ts",
+    "export:fixture": "node --import tsx scripts/export-fixtures.ts"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "lottie-web": "^5.13.0"
+  }
+}

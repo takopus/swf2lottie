@@ -1,0 +1,150 @@
+:root {
+  color-scheme: light;
+  --page-bg: #e9e4d8;
+  --panel-bg: rgba(255, 250, 241, 0.9);
+  --border: #1f2937;
+  --text: #1f2937;
+  --accent: #c4622d;
+  --accent-hover: #9d4e23;
+  --preview-bg: #f3f0e8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top left, rgba(196, 98, 45, 0.18), transparent 32%),
+    linear-gradient(180deg, #f1ecdf 0%, var(--page-bg) 100%);
+}
+
+.page {
+  width: min(960px, calc(100% - 32px));
+  margin: 32px auto;
+  display: grid;
+  gap: 16px;
+}
+
+.panel,
+.preview-panel,
+.issues {
+  border: 2px solid var(--border);
+  border-radius: 18px;
+  background: var(--panel-bg);
+  box-shadow: 8px 8px 0 rgba(31, 41, 55, 0.12);
+}
+
+.panel {
+  padding: 20px;
+}
+
+h1 {
+  margin: 0 0 16px;
+  font-size: clamp(28px, 4vw, 44px);
+  line-height: 0.95;
+  text-transform: lowercase;
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.file-button,
+button {
+  border: 2px solid var(--border);
+  border-radius: 999px;
+  padding: 12px 18px;
+  font: inherit;
+  font-weight: 700;
+}
+
+.file-button {
+  position: relative;
+  overflow: hidden;
+  background: white;
+  cursor: pointer;
+}
+
+.file-button input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+button {
+  color: white;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+button:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.status,
+.saved-output {
+  margin: 14px 0 0;
+}
+
+.preview-panel {
+  min-height: 480px;
+  padding: 16px;
+  background:
+    linear-gradient(135deg, rgba(31, 41, 55, 0.04), rgba(31, 41, 55, 0)),
+    var(--preview-bg);
+}
+
+.preview {
+  width: 100%;
+  min-height: 446px;
+  display: grid;
+  place-items: center;
+}
+
+.preview svg {
+  max-width: 100%;
+  max-height: 446px;
+}
+
+.issues {
+  margin: 0;
+  padding: 16px 18px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .page {
+    width: min(100%, calc(100% - 20px));
+    margin: 16px auto 24px;
+  }
+
+  .panel,
+  .preview-panel,
+  .issues {
+    border-radius: 14px;
+    box-shadow: 5px 5px 0 rgba(31, 41, 55, 0.12);
+  }
+
+  .preview-panel {
+    min-height: 360px;
+  }
+
+  .preview {
+    min-height: 326px;
+  }
+}
