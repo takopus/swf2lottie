@@ -14,6 +14,19 @@ export function validateDocumentSubset(document: FlashDocument): ConversionIssue
       continue;
     }
 
+    if (symbol.kind === "morphshape") {
+      symbol.paths.forEach((path, pathIndex) => {
+        if (path.start.fill) {
+          validateFill(path.start.fill, issues, `${symbol.id}.paths[${pathIndex}].start.fill`);
+        }
+
+        if (path.end.fill) {
+          validateFill(path.end.fill, issues, `${symbol.id}.paths[${pathIndex}].end.fill`);
+        }
+      });
+      continue;
+    }
+
     symbol.timeline.frames.forEach((frame) => {
       frame.displayList.forEach((instance, displayIndex) => {
         validateColorTransform(

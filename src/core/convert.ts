@@ -1,8 +1,11 @@
 import { ConversionError } from "./issues.js";
 import type { ConversionIssue } from "./issues.js";
 import { exportToLottie } from "./export-lottie/exporter.js";
+import { optimizeLottieAnimation } from "./optimize-lottie.js";
 import { parseSwf } from "./swf/parser.js";
 import { validateDocumentSubset } from "./validate/subset.js";
+
+const ENABLE_SAFE_LOTTIE_OPTIMIZATION = false;
 
 export interface ConvertSwfOptions {
   failOnWarnings?: boolean;
@@ -37,7 +40,11 @@ export function convertSwfToLottie(
   }
 
   return {
-    animation: exportResult.result.animation,
+    animation: exportResult.result.animation
+      ? (ENABLE_SAFE_LOTTIE_OPTIMIZATION
+          ? optimizeLottieAnimation(exportResult.result.animation)
+          : exportResult.result.animation)
+      : null,
     issues
   };
 }

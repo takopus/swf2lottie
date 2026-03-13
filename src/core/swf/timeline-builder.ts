@@ -1,4 +1,13 @@
-import type { FlashColorTransform, FlashDisplayObjectState, FlashDocument, FlashFrame, FlashMatrix, FlashMovieClipSymbol, FlashShapeSymbol } from "../ir/index.js";
+import type {
+  FlashColorTransform,
+  FlashDisplayObjectState,
+  FlashDocument,
+  FlashFrame,
+  FlashMatrix,
+  FlashMorphShapeSymbol,
+  FlashMovieClipSymbol,
+  FlashShapeSymbol
+} from "../ir/index.js";
 import type { ConversionIssue } from "../issues.js";
 import type { ParsedSwfMovieHeader } from "./types.js";
 import type {
@@ -15,6 +24,8 @@ interface DisplayListEntry {
   symbolId: string;
   depth: number;
   name?: string;
+  clipDepth?: number;
+  ratio?: number;
   matrix: FlashMatrix;
   colorTransform: FlashColorTransform;
 }
@@ -27,7 +38,7 @@ export function buildDocumentFromTags(
   issues: ConversionIssue[];
 } {
   const issues: ConversionIssue[] = [];
-  const symbols = new Map<string, FlashShapeSymbol | FlashMovieClipSymbol>();
+  const symbols = new Map<string, FlashShapeSymbol | FlashMorphShapeSymbol | FlashMovieClipSymbol>();
 
   collectSymbols(rootTags, symbols);
 
@@ -68,7 +79,7 @@ export function buildDocumentFromTags(
 
 function collectSymbols(
   tags: SwfControlTag[],
-  symbols: Map<string, FlashShapeSymbol | FlashMovieClipSymbol>
+  symbols: Map<string, FlashShapeSymbol | FlashMorphShapeSymbol | FlashMovieClipSymbol>
 ): void {
   for (const tag of tags) {
     if (isDefineShapeTag(tag)) {
@@ -76,6 +87,18 @@ function collectSymbols(
       if (!symbols.has(symbolId)) {
         symbols.set(symbolId, {
           kind: "shape",
+          id: symbolId,
+          paths: tag.paths
+        });
+      }
+      continue;
+    }
+
+    if (isDefineMorphShapeTag(tag)) {
+      const symbolId = symbolIdFromCharacterId(tag.characterId);
+      if (!symbols.has(symbolId)) {
+        symbols.set(symbolId, {
+          kind: "morphshape",
           id: symbolId,
           paths: tag.paths
         });
@@ -169,6 +192,16 @@ function applyPlaceObject(
       id: existing?.id ?? nextInstanceId(),
       symbolId,
       depth: tag.depth,
+      ...(tag.clipDepth !== undefined
+        ? { clipDepth: tag.clipDepth }
+        : existing?.clipDepth !== undefined
+          ? { clipDepth: existing.clipDepth }
+          : {}),
+      ...(tag.ratio !== undefined
+        ? { ratio: tag.ratio / 65535 }
+        : existing?.ratio !== undefined
+          ? { ratio: existing.ratio }
+          : {}),
       matrix: tag.matrix ?? existing?.matrix ?? identityMatrix(),
       colorTransform: tag.colorTransform
         ? swfColorTransformToFlash(tag.colorTransform)
@@ -188,6 +221,8 @@ function applyPlaceObject(
 
   const updatedEntry: DisplayListEntry = {
     ...existing,
+    ...(tag.clipDepth !== undefined ? { clipDepth: tag.clipDepth } : {}),
+    ...(tag.ratio !== undefined ? { ratio: tag.ratio / 65535 } : {}),
     matrix: tag.matrix ?? existing.matrix,
     colorTransform: tag.colorTransform
       ? swfColorTransformToFlash(tag.colorTransform)
@@ -201,16 +236,37 @@ function applyPlaceObject(
 }
 
 function snapshotDisplayList(displayList: Map<number, DisplayListEntry>): FlashDisplayObjectState[] {
-  return Array.from(displayList.values())
-    .sort((left, right) => left.depth - right.depth)
-    .map((entry) => ({
+  const sorted = Array.from(displayList.values()).sort((left, right) => left.depth - right.depth);
+  const activeMasks: Array<{ id: string; clipDepth: number }> = [];
+
+  return sorted.map((entry) => {
+    while (activeMasks.length > 0 && entry.depth > (activeMasks[activeMasks.length - 1]?.clipDepth ?? Number.NEGATIVE_INFINITY)) {
+      activeMasks.pop();
+    }
+
+    const activeMask = activeMasks[activeMasks.length - 1];
+    const state: FlashDisplayObjectState = {
       id: entry.id,
       symbolId: entry.symbolId,
       depth: entry.depth,
       matrix: entry.matrix,
       colorTransform: entry.colorTransform,
-      ...(entry.name ? { name: entry.name } : {})
-    }));
+      ...(entry.name ? { name: entry.name } : {}),
+      ...(entry.ratio !== undefined ? { ratio: entry.ratio } : {}),
+      ...(activeMask ? { maskLayerId: activeMask.id } : {})
+    };
+
+    if (entry.clipDepth !== undefined && entry.clipDepth > entry.depth) {
+      state.isMask = true;
+      delete state.maskLayerId;
+      activeMasks.push({
+        id: entry.id,
+        clipDepth: entry.clipDepth
+      });
+    }
+
+    return state;
+  });
 }
 
 function swfColorTransformToFlash(transform: NonNullable<SwfPlaceObjectTag["colorTransform"]>): FlashColorTransform {
@@ -329,6 +385,10 @@ function symbolIdFromCharacterId(characterId: number): string {
 
 function isDefineShapeTag(tag: SwfControlTag): tag is SwfDefineShapeTag {
   return tag.code === 2 || tag.code === 22 || tag.code === 32 || tag.code === 83;
+}
+
+function isDefineMorphShapeTag(tag: SwfControlTag): tag is Extract<SwfControlTag, { code: 46 | 84 }> {
+  return tag.code === 46 || tag.code === 84;
 }
 
 function isDefineSpriteTag(tag: SwfControlTag): tag is SwfDefineSpriteTag {

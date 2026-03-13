@@ -10,6 +10,8 @@ export interface SwfPlaceObjectTag {
   depth: number;
   hasMove: boolean;
   characterId?: number;
+  ratio?: number;
+  clipDepth?: number;
   matrix?: {
     a: number;
     b: number;
@@ -42,6 +44,12 @@ export interface SwfDefineShapeTag {
   paths: import("../ir/index.js").FlashShapePath[];
 }
 
+export interface SwfDefineMorphShapeTag {
+  code: 46 | 84;
+  characterId: number;
+  paths: import("../ir/index.js").FlashMorphShapePath[];
+}
+
 export interface SwfDefineSpriteTag {
   code: 39;
   spriteId: number;
@@ -65,6 +73,7 @@ export type SwfControlTag =
   | SwfPlaceObjectTag
   | SwfRemoveObject2Tag
   | SwfDefineShapeTag
+  | SwfDefineMorphShapeTag
   | SwfDefineSpriteTag
   | SwfFileAttributesTag
   | SwfBackgroundColorTag

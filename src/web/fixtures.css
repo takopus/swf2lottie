@@ -1,0 +1,107 @@
+:root {
+  color-scheme: light;
+  --bg: #ece7dc;
+  --panel: rgba(255, 252, 245, 0.92);
+  --ink: #1f2937;
+  --line: #1f2937;
+  --stage: #f5f2ea;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--ink);
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+  background:
+    radial-gradient(circle at top right, rgba(196, 98, 45, 0.12), transparent 28%),
+    linear-gradient(180deg, #f4efe4 0%, var(--bg) 100%);
+}
+
+.page {
+  width: min(1440px, calc(100% - 28px));
+  margin: 20px auto 28px;
+}
+
+.header {
+  margin-bottom: 16px;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(28px, 4vw, 46px);
+  line-height: 0.95;
+  text-transform: lowercase;
+}
+
+.caption {
+  margin: 8px 0 0;
+}
+
+.gallery {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.card {
+  width: 292px;
+  padding: 14px;
+  border: 2px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: 7px 7px 0 rgba(31, 41, 55, 0.12);
+}
+
+.stage {
+  width: 256px;
+  height: 256px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 2px solid var(--line);
+  border-radius: 12px;
+  background:
+    linear-gradient(135deg, rgba(31, 41, 55, 0.04), rgba(31, 41, 55, 0)),
+    var(--stage);
+}
+
+.stage svg {
+  width: 256px;
+  height: 256px;
+}
+
+.name,
+.meta,
+.message {
+  margin: 10px 0 0;
+  overflow-wrap: anywhere;
+}
+
+.name {
+  font-weight: 700;
+}
+
+.meta {
+  margin-top: 4px;
+}
+
+@media (max-width: 720px) {
+  .page {
+    width: min(100%, calc(100% - 16px));
+    margin: 12px auto 20px;
+  }
+
+  .gallery {
+    gap: 12px;
+  }
+
+  .card {
+    width: 100%;
+    max-width: 292px;
+  }
+}

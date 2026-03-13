@@ -3,10 +3,12 @@ import type {
   FlashDisplayObjectState,
   FlashDocument,
   FlashGradientFill,
+  FlashMorphShapePath,
   FlashMovieClipSymbol,
   FlashShapePath,
   FlashShapeSymbol,
   FlashSolidFill,
+  FlashSolidStroke,
   FlashTimeline
 } from "../ir/index.js";
 import type { ConversionIssue } from "../issues.js";
@@ -37,6 +39,16 @@ interface FlattenedShapeTrack {
   depthPath: number[];
   symbol: FlashShapeSymbol;
   samples: Array<FlashDisplayObjectState | null>;
+}
+
+interface ScalarKeySample {
+  frame: number;
+  value: number;
+}
+
+interface VectorKeySample {
+  frame: number;
+  value: number[];
 }
 
 type FlashSymbolMap = Map<string, FlashDocument["symbols"][number]>;
@@ -80,7 +92,7 @@ export function exportToLottie(document: FlashDocument): {
             v: "5.12.2",
             fr: document.frameRate,
             ip: 0,
-            op: root.timeline.frames.length,
+            op: minimumOutPoint(root.timeline.frames.length),
             w: document.width,
             h: document.height,
             nm: "swf2lottie",
@@ -118,10 +130,11 @@ function exportTimelineLayers(
   issues: ConversionIssue[]
 ): Record<string, unknown>[] {
   const tracks = buildTimelineTracks(timeline);
+  const trackMap = new Map(tracks.map((track) => [track.id, track]));
 
   const layers = tracks
     .sort((left, right) => right.depth - left.depth)
-    .flatMap((track) => exportTrack(track, timeline, document, symbolMap, issues));
+    .flatMap((track) => exportTrack(track, trackMap, timeline, document, symbolMap, issues));
 
   return layers.map((layer, index) => ({
     ...layer,
@@ -131,11 +144,16 @@ function exportTimelineLayers(
 
 function exportTrack(
   track: TimelineTrack,
+  trackMap: Map<string, TimelineTrack>,
   timeline: FlashTimeline,
   document: FlashDocument,
   symbolMap: FlashSymbolMap,
   issues: ConversionIssue[]
 ): Record<string, unknown>[] {
+  if (track.samples.some((sample) => sample?.isMask)) {
+    return [];
+  }
+
   const symbol = symbolMap.get(track.symbolId);
 
   if (!symbol) {
@@ -152,6 +170,8 @@ function exportTrack(
   const transformSamples = track.samples
     .map((sample, frame) => toTransformSample(frame, sample, issues, track.id))
     .filter((sample): sample is TransformSample => sample !== null);
+  const maskProperties = exportMaskProperties(track, trackMap, symbolMap, issues);
+  const shouldBakeLayerTransform = needsBakedMatrix(track.samples) || maskProperties.length > 0;
 
   if (transformSamples.length === 0) {
     return [];
@@ -163,18 +183,21 @@ function exportTrack(
     sr: 1,
     ks: exportTransformSamples(transformSamples),
     ip: track.firstFrame,
-    op: Math.min(track.lastFrame + 1, timeline.frames.length),
+    op: minimumOutPoint(Math.min(track.lastFrame + 1, timeline.frames.length), track.firstFrame),
     st: 0,
     ao: 0
   };
 
   if (symbol.kind === "shape") {
-    const shapes = symbol.paths.flatMap((path) => exportShapePath(path, issues, transformSamples, track.samples));
+    const sourceSamples = shouldBakeLayerTransform ? track.samples : undefined;
+    const shapes = sortShapeGroups(
+      symbol.paths.flatMap((path) => exportShapePath(path, issues, transformSamples, sourceSamples))
+    );
     if (shapes.length === 0) {
       return [];
     }
 
-    const layerTransformSamples = needsBakedMatrix(track.samples)
+    const layerTransformSamples = shouldBakeLayerTransform
       ? transformSamples.map((sample) => ({
           ...sample,
           position: [0, 0, 0] as [number, number, number],
@@ -188,7 +211,36 @@ function exportTrack(
         ...baseLayer,
         ks: exportTransformSamples(layerTransformSamples),
         ty: 4,
-        shapes
+        shapes,
+        ...(maskProperties.length > 0 ? { hasMask: true, masksProperties: maskProperties } : {})
+      }
+    ];
+  }
+
+  if (symbol.kind === "morphshape") {
+    const shapes = sortShapeGroups(
+      symbol.paths.flatMap((path) => exportMorphShapePath(path, track.samples, issues))
+    );
+    if (shapes.length === 0) {
+      return [];
+    }
+
+    const layerTransformSamples = shouldBakeLayerTransform
+      ? transformSamples.map((sample) => ({
+          ...sample,
+          position: [0, 0, 0] as [number, number, number],
+          rotation: 0,
+          scale: [100, 100, 100] as [number, number, number]
+        }))
+      : transformSamples;
+
+    return [
+      {
+        ...baseLayer,
+        ks: exportTransformSamples(layerTransformSamples),
+        ty: 4,
+        shapes,
+        ...(maskProperties.length > 0 ? { hasMask: true, masksProperties: maskProperties } : {})
       }
     ];
   }
@@ -306,49 +358,94 @@ function exportShapePath(
     ? bakePathAnimation(path, sourceSamples)
     : exportLottieBezier(path);
 
-  if (!path.fill) {
+  const items: Record<string, unknown>[] = [shapePath];
+
+  if (path.fill) {
+    if (path.fill.kind === "solid") {
+      items.push(exportSolidFill(path.fill, transformSamples));
+    } else if (path.fill.kind === "linear-gradient") {
+      items.push(exportLinearGradientFill(path.fill, transformSamples, sourceSamples));
+    } else if (path.fill.kind === "radial-gradient") {
+      items.push(exportRadialGradientFill(path.fill, transformSamples, sourceSamples));
+    } else {
+      issues.push({
+        code: "not_implemented",
+        severity: "warning",
+        message: "This gradient fill type is parsed but not exported yet.",
+        details: { fillKind: path.fill.kind }
+      });
+    }
+  }
+
+  if (path.stroke?.kind === "solid") {
+    items.push(exportSolidStroke(path.stroke));
+  }
+
+  if (items.length === 1) {
     issues.push({
       code: "unsupported_fill",
       severity: "warning",
-      message: "Unfilled paths are skipped."
+      message: "Paths without supported fill or stroke are skipped."
     });
     return [];
   }
 
-  if (path.fill.kind === "solid") {
-    return [
-      {
-        ty: "gr",
-        it: [shapePath, exportSolidFill(path.fill, transformSamples), exportGroupTransform()]
-      }
-    ];
+  return [
+    {
+      ty: "gr",
+      it: [...items, exportGroupTransform()]
+    }
+  ];
+}
+
+function exportMaskProperties(
+  track: TimelineTrack,
+  trackMap: Map<string, TimelineTrack>,
+  symbolMap: FlashSymbolMap,
+  issues: ConversionIssue[]
+): Record<string, unknown>[] {
+  const maskLayerId = firstMaskLayerId(track.samples);
+  if (!maskLayerId) {
+    return [];
   }
 
-  if (path.fill.kind === "linear-gradient") {
-    return [
-      {
-        ty: "gr",
-        it: [shapePath, exportLinearGradientFill(path.fill), exportGroupTransform()]
-      }
-    ];
+  const maskTrack = trackMap.get(maskLayerId);
+  if (!maskTrack) {
+    issues.push({
+      code: "unsupported_mask",
+      severity: "warning",
+      message: "Mask layer reference could not be resolved.",
+      path: track.id,
+      details: { maskLayerId }
+    });
+    return [];
   }
 
-  if (path.fill.kind === "radial-gradient") {
-    return [
-      {
-        ty: "gr",
-        it: [shapePath, exportRadialGradientFill(path.fill), exportGroupTransform()]
-      }
-    ];
+  const maskSymbol = symbolMap.get(maskTrack.symbolId);
+  if (!maskSymbol || (maskSymbol.kind !== "shape" && maskSymbol.kind !== "morphshape")) {
+    issues.push({
+      code: "unsupported_mask",
+      severity: "warning",
+      message: "Only shape-based masks are exported.",
+      path: track.id,
+      details: { maskLayerId, symbolId: maskTrack.symbolId }
+    });
+    return [];
   }
 
-  issues.push({
-    code: "not_implemented",
-    severity: "warning",
-    message: "This gradient fill type is parsed but not exported yet.",
-    details: { fillKind: path.fill.kind }
-  });
-  return [];
+  const maskPaths = maskSymbol.kind === "shape"
+    ? maskSymbol.paths.map((path) => bakePathAnimation(path, maskTrack.samples).ks)
+    : maskSymbol.paths.map((path) => exportMorphBezier(path, maskTrack.samples));
+
+  return maskPaths.map((ks, index) => ({
+    mode: "a",
+    inv: false,
+    cl: true,
+    nm: `mask:${maskLayerId}:${index + 1}`,
+    o: { a: 0, k: 100 },
+    pt: ks,
+    x: { a: 0, k: 0 }
+  }));
 }
 
 function exportStaticMovieClipShapes(
@@ -362,10 +459,10 @@ function exportStaticMovieClipShapes(
     return [];
   }
 
-  return frame.displayList
+  return sortShapeGroups(frame.displayList
     .slice()
     .sort((left, right) => right.depth - left.depth)
-    .flatMap((instance) => exportStaticInstanceShapes(instance, symbolMap, issues, transformSamples));
+    .flatMap((instance) => exportStaticInstanceShapes(instance, symbolMap, issues, transformSamples)));
 }
 
 function exportStaticInstanceShapes(
@@ -381,6 +478,24 @@ function exportStaticInstanceShapes(
 
   if (symbol.kind === "shape") {
     const items = symbol.paths.flatMap((path) => exportShapePath(path, issues, transformSamples));
+    if (items.length === 0) {
+      return [];
+    }
+
+    return [
+      {
+        ty: "gr",
+        nm: instance.name ?? instance.id,
+        it: [
+          ...items,
+          exportGroupTransformFromInstance(instance)
+        ]
+      }
+    ];
+  }
+
+  if (symbol.kind === "morphshape") {
+    const items = symbol.paths.flatMap((path) => exportMorphShapePath(path, [instance], issues));
     if (items.length === 0) {
       return [];
     }
@@ -449,8 +564,9 @@ function exportMovieClipAsFlattenedLayers(
         return [];
       }
 
-      const shapes = leaf.symbol.paths.flatMap((path) => exportShapePath(path, issues, transformSamples));
-      const bakedShapes = leaf.symbol.paths.flatMap((path) => exportShapePath(path, issues, transformSamples, leaf.samples));
+      const bakedShapes = sortShapeGroups(
+        leaf.symbol.paths.flatMap((path) => exportShapePath(path, issues, transformSamples, leaf.samples))
+      );
       if (bakedShapes.length === 0) {
         return [];
       }
@@ -528,12 +644,18 @@ function collectFlattenedFromMovieClipFrame(
       nextDepthPath
     );
 
-    if (childSymbol.kind === "shape") {
+    if (childSymbol.kind === "shape" || childSymbol.kind === "morphshape") {
       const existing = trackMap.get(combinedState.id) ?? createFlattenedShapeTrack(
         combinedState.id,
         combinedState.name,
         nextDepthPath,
-        childSymbol,
+        childSymbol.kind === "shape"
+          ? childSymbol
+          : {
+              kind: "shape",
+              id: `${childSymbol.id}:ratio:${Math.round((combinedState.ratio ?? 0) * 65535)}`,
+              paths: childSymbol.paths.map((path) => interpolateMorphPath(path, combinedState.ratio ?? 0))
+            },
         rootFrameCount
       );
       existing.samples[rootFrame] = combinedState;
@@ -568,7 +690,8 @@ function combineDisplayStates(
     depth: depthPath[depthPath.length - 1] ?? child.depth,
     ...(child.name || parent.name ? { name: child.name ?? parent.name } : {}),
     matrix: multiplyMatrices(parent.matrix, child.matrix),
-    colorTransform: combineColorTransforms(parent.colorTransform, child.colorTransform)
+    colorTransform: combineColorTransforms(parent.colorTransform, child.colorTransform),
+    ...(child.ratio !== undefined ? { ratio: child.ratio } : {})
   };
 }
 
@@ -649,6 +772,44 @@ function exportLottieBezier(path: FlashShapePath): Record<string, unknown> {
   };
 }
 
+function exportMorphShapePath(
+  path: FlashMorphShapePath,
+  samples: Array<FlashDisplayObjectState | null>,
+  issues: ConversionIssue[]
+): Record<string, unknown>[] {
+  const shapePath = {
+    ty: "sh",
+    ks: exportMorphBezier(path, samples)
+  };
+  const items: Record<string, unknown>[] = [shapePath];
+  const fill = exportMorphFill(path, samples, issues);
+  const stroke = exportMorphStroke(path, samples);
+
+  if (fill) {
+    items.push(fill);
+  }
+
+  if (stroke) {
+    items.push(stroke);
+  }
+
+  if (items.length === 1) {
+    issues.push({
+      code: "unsupported_feature",
+      severity: "warning",
+      message: "Morph path without a supported fill or stroke is skipped."
+    });
+    return [];
+  }
+
+  return [
+    {
+      ty: "gr",
+      it: [...items, exportGroupTransform()]
+    }
+  ];
+}
+
 function bakePathAnimation(
   path: FlashShapePath,
   samples: Array<FlashDisplayObjectState | null>
@@ -688,6 +849,56 @@ function bakePathAnimation(
         ...(index < keyframes.length - 1 ? { e: [keyframes[index + 1]?.s[0] ?? keyframe.s[0]] } : {})
       }))
     }
+  };
+}
+
+function exportMorphBezier(
+  path: FlashMorphShapePath,
+  samples: Array<FlashDisplayObjectState | null>
+): Record<string, unknown> {
+  const [startGeometry, endGeometry] = prepareMorphGeometryPair(path.start.geometry, path.end.geometry);
+
+  if (!canMorphGeometries(startGeometry, endGeometry)) {
+    return {
+      a: 0,
+      k: bezierGeometryToLottie(startGeometry)
+    };
+  }
+
+  const keyframes = samples
+    .map((sample, frame) => {
+      if (!sample) {
+        return null;
+      }
+
+      const morphed = interpolateGeometry(startGeometry, endGeometry, sample.ratio ?? 0);
+      const geometry = needsBakedMatrix(samples)
+        ? transformBezierGeometry(morphed, sample.matrix)
+        : bezierGeometryToLottie(morphed);
+
+      return {
+        frame,
+        value: geometry
+      };
+    })
+    .filter((value): value is { frame: number; value: Record<string, unknown> } => value !== null);
+
+  const uniqueValues = new Set(keyframes.map((keyframe) => JSON.stringify(keyframe.value)));
+  if (uniqueValues.size <= 1) {
+    return {
+      a: 0,
+      k: keyframes[0]?.value ?? bezierGeometryToLottie(startGeometry)
+    };
+  }
+
+  return {
+    a: 1,
+    k: keyframes.map((keyframe, index) => ({
+      t: keyframe.frame,
+      s: [keyframe.value],
+      h: 1,
+      ...(index < keyframes.length - 1 ? { e: [keyframes[index + 1]?.value ?? keyframe.value] } : {})
+    }))
   };
 }
 
@@ -733,16 +944,138 @@ function exportSolidFill(fill: FlashSolidFill, transformSamples: TransformSample
   };
 }
 
-function exportLinearGradientFill(fill: FlashGradientFill): Record<string, unknown> {
-  const start = applyGradientMatrix(fill.matrix, -16384 / 20, 0);
-  const end = applyGradientMatrix(fill.matrix, 16384 / 20, 0);
+function exportMorphFill(
+  path: FlashMorphShapePath,
+  samples: Array<FlashDisplayObjectState | null>,
+  issues: ConversionIssue[]
+): Record<string, unknown> | null {
+  const startFill = path.start.fill;
+  const endFill = path.end.fill;
+
+  if (!startFill || !endFill) {
+    return startFill ?? endFill ? null : null;
+  }
+
+  if (startFill.kind === "solid" && endFill.kind === "solid") {
+    const colorKeyframes = samples
+      .map((sample, frame) => {
+        if (!sample) {
+          return null;
+        }
+
+        return {
+          frame,
+          value: interpolateColorVector(startFill.color, endFill.color, sample.ratio ?? 0)
+        };
+      })
+      .filter((value): value is { frame: number; value: [number, number, number, number] } => value !== null);
+
+    const opacityKeyframes = samples
+      .map((sample, frame) => {
+        if (!sample) {
+          return null;
+        }
+
+        return {
+          frame,
+          value: clamp(interpolateNumber(startFill.alpha, endFill.alpha, sample.ratio ?? 0) * 100, 0, 100)
+        };
+      })
+      .filter((value): value is { frame: number; value: number } => value !== null);
+
+    return {
+      ty: "fl",
+      c: exportVectorProperty(colorKeyframes),
+      o: exportScalarProperty(opacityKeyframes),
+      r: 1
+    };
+  }
+
+  issues.push({
+    code: "unsupported_fill",
+    severity: "warning",
+    message: "Only solid morph fills are exported right now."
+  });
+  return null;
+}
+
+function exportMorphStroke(
+  path: FlashMorphShapePath,
+  samples: Array<FlashDisplayObjectState | null>
+): Record<string, unknown> | null {
+  const startStroke = path.start.stroke;
+  const endStroke = path.end.stroke;
+
+  if (!startStroke || !endStroke || startStroke.kind !== "solid" || endStroke.kind !== "solid") {
+    return null;
+  }
+
+  const colorKeyframes = samples
+    .map((sample, frame) => sample
+      ? { frame, value: interpolateColorVector(startStroke.color, endStroke.color, sample.ratio ?? 0) }
+      : null)
+    .filter((value): value is { frame: number; value: [number, number, number, number] } => value !== null);
+  const opacityKeyframes = samples
+    .map((sample, frame) => sample
+      ? { frame, value: clamp(interpolateNumber(startStroke.alpha, endStroke.alpha, sample.ratio ?? 0) * 100, 0, 100) }
+      : null)
+    .filter((value): value is { frame: number; value: number } => value !== null);
+  const widthKeyframes = samples
+    .map((sample, frame) => sample
+      ? { frame, value: interpolateNumber(startStroke.width, endStroke.width, sample.ratio ?? 0) }
+      : null)
+    .filter((value): value is { frame: number; value: number } => value !== null);
+
+  return {
+    ty: "st",
+    c: exportVectorProperty(colorKeyframes),
+    o: exportScalarProperty(opacityKeyframes),
+    w: exportScalarProperty(widthKeyframes),
+    lc: lineCapToLottie(startStroke.lineCap),
+    lj: lineJoinToLottie(startStroke.lineJoin),
+    ...(startStroke.miterLimit !== undefined ? { ml: startStroke.miterLimit } : {})
+  };
+}
+
+function exportSolidStroke(stroke: FlashSolidStroke): Record<string, unknown> {
+  return {
+    ty: "st",
+    c: { a: 0, k: colorVector(stroke.color) },
+    o: { a: 0, k: clamp(stroke.alpha * 100, 0, 100) },
+    w: { a: 0, k: stroke.width },
+    lc: lineCapToLottie(stroke.lineCap),
+    lj: lineJoinToLottie(stroke.lineJoin),
+    ...(stroke.miterLimit !== undefined ? { ml: stroke.miterLimit } : {})
+  };
+}
+
+function exportLinearGradientFill(
+  fill: FlashGradientFill,
+  transformSamples: TransformSample[] = [],
+  sourceSamples?: Array<FlashDisplayObjectState | null>
+): Record<string, unknown> {
+  const baseStart = applyGradientMatrix(fill.matrix, -16384 / 20, 0);
+  const baseEnd = applyGradientMatrix(fill.matrix, 16384 / 20, 0);
+  const bakedSamples = sourceSamples
+    ?.map((sample, frame) => sample
+      ? { frame, value: transformLinearGradient(baseStart, baseEnd, sample.matrix) }
+      : null)
+    .filter((
+      value
+    ): value is { frame: number; value: { start: [number, number]; end: [number, number] } } => value !== null);
+  const start = bakedSamples
+    ? exportVectorProperty(bakedSamples.map((sample) => ({ frame: sample.frame, value: sample.value.start })))
+    : exportGradientPointProperty(fill, -16384 / 20, 0, transformSamples, sourceSamples);
+  const end = bakedSamples
+    ? exportVectorProperty(bakedSamples.map((sample) => ({ frame: sample.frame, value: sample.value.end })))
+    : exportGradientPointProperty(fill, 16384 / 20, 0, transformSamples, sourceSamples);
 
   return {
     ty: "gf",
     o: { a: 0, k: 100 },
     r: 1,
-    s: { a: 0, k: start },
-    e: { a: 0, k: end },
+    s: start,
+    e: end,
     t: 1,
     g: {
       p: fill.stops.length,
@@ -754,16 +1087,20 @@ function exportLinearGradientFill(fill: FlashGradientFill): Record<string, unkno
   };
 }
 
-function exportRadialGradientFill(fill: FlashGradientFill): Record<string, unknown> {
-  const start = applyGradientMatrix(fill.matrix, 0, 0);
-  const end = applyGradientMatrix(fill.matrix, 16384 / 20, 0);
+function exportRadialGradientFill(
+  fill: FlashGradientFill,
+  transformSamples: TransformSample[] = [],
+  sourceSamples?: Array<FlashDisplayObjectState | null>
+): Record<string, unknown> {
+  const start = exportGradientPointProperty(fill, 0, 0, transformSamples, sourceSamples);
+  const end = exportGradientPointProperty(fill, 16384 / 20, 0, transformSamples, sourceSamples);
 
   return {
     ty: "gf",
     o: { a: 0, k: 100 },
     r: 1,
-    s: { a: 0, k: start },
-    e: { a: 0, k: end },
+    s: start,
+    e: end,
     t: 2,
     h: { a: 0, k: 0 },
     a: { a: 0, k: 0 },
@@ -812,38 +1149,30 @@ function exportGroupTransformFromInstance(instance: FlashDisplayObjectState): Re
 function exportScalarProperty(
   keyframes: Array<{ frame: number; value: number }>
 ): Record<string, unknown> {
-  const uniqueValues = new Set(keyframes.map((keyframe) => Math.round(keyframe.value * 1000)));
+  const compressed = compressScalarKeyframes(keyframes, 0.05);
+  const uniqueValues = new Set(compressed.map((keyframe) => Math.round(keyframe.value * 1000)));
   if (uniqueValues.size <= 1) {
-    return { a: 0, k: keyframes[0]?.value ?? 0 };
+    return { a: 0, k: compressed[0]?.value ?? 0 };
   }
 
   return {
     a: 1,
-    k: keyframes.map((keyframe, index) => ({
-      t: keyframe.frame,
-      s: [keyframe.value],
-      h: 1,
-      ...(index < keyframes.length - 1 ? { e: [keyframes[index + 1]?.value ?? keyframe.value] } : {})
-    }))
+    k: compressed.map((keyframe, index) => exportAnimatedScalarKeyframe(keyframe, compressed[index + 1]))
   };
 }
 
 function exportVectorProperty(
-  keyframes: Array<{ frame: number; value: [number, number, number] }>
+  keyframes: Array<{ frame: number; value: number[] }>
 ): Record<string, unknown> {
-  const uniqueValues = new Set(keyframes.map((keyframe) => keyframe.value.join(",")));
+  const compressed = compressVectorKeyframes(keyframes, 0.05);
+  const uniqueValues = new Set(compressed.map((keyframe) => keyframe.value.join(",")));
   if (uniqueValues.size <= 1) {
-    return { a: 0, k: keyframes[0]?.value ?? [0, 0, 0] };
+    return { a: 0, k: compressed[0]?.value ?? [0, 0, 0] };
   }
 
   return {
     a: 1,
-    k: keyframes.map((keyframe, index) => ({
-      t: keyframe.frame,
-      s: keyframe.value,
-      h: 1,
-      ...(index < keyframes.length - 1 ? { e: keyframes[index + 1]?.value ?? keyframe.value } : {})
-    }))
+    k: compressed.map((keyframe, index) => exportAnimatedVectorKeyframe(keyframe, compressed[index + 1]))
   };
 }
 
@@ -872,8 +1201,12 @@ function canFlattenStaticMovieClip(
       return false;
     }
 
-    if (child.kind === "shape") {
+    if (child.kind === "shape" || child.kind === "morphshape") {
       return true;
+    }
+
+    if (child.kind !== "movieclip") {
+      return false;
     }
 
     return canFlattenStaticMovieClip(child, symbolMap, seen);
@@ -930,6 +1263,53 @@ function applyGradientMatrix(
   ];
 }
 
+function transformLinearGradient(
+  start: [number, number],
+  end: [number, number],
+  matrix: FlashDisplayObjectState["matrix"]
+): { start: [number, number]; end: [number, number] } {
+  const center: [number, number] = [
+    (start[0] + end[0]) / 2,
+    (start[1] + end[1]) / 2
+  ];
+  const halfDirection: [number, number] = [
+    (end[0] - start[0]) / 2,
+    (end[1] - start[1]) / 2
+  ];
+  const transformedCenter = applyMatrixToPoint(center, matrix);
+  const transformedHalfDirection = applyInverseTransposeToVector(halfDirection, matrix);
+
+  return {
+    start: [
+      transformedCenter[0] - transformedHalfDirection[0],
+      transformedCenter[1] - transformedHalfDirection[1]
+    ],
+    end: [
+      transformedCenter[0] + transformedHalfDirection[0],
+      transformedCenter[1] + transformedHalfDirection[1]
+    ]
+  };
+}
+
+function exportGradientPointProperty(
+  fill: FlashGradientFill,
+  x: number,
+  y: number,
+  transformSamples: TransformSample[],
+  sourceSamples?: Array<FlashDisplayObjectState | null>
+): Record<string, unknown> {
+  const basePoint = applyGradientMatrix(fill.matrix, x, y);
+  const actualSamples = sourceSamples
+    ?.map((sample, frame) => sample ? ({ frame, value: applyMatrixToPoint(basePoint, sample.matrix) }) : null)
+    .filter((value): value is { frame: number; value: [number, number] } => value !== null);
+
+  if (actualSamples && actualSamples.length > 0) {
+    return exportVectorProperty(actualSamples);
+  }
+
+  return { a: 0, k: basePoint };
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -954,8 +1334,296 @@ function applyMatrixToVector(
   ];
 }
 
+function applyInverseTransposeToVector(
+  vector: [number, number],
+  matrix: FlashDisplayObjectState["matrix"]
+): [number, number] {
+  const determinant = matrix.a * matrix.d - matrix.b * matrix.c;
+  if (Math.abs(determinant) < 1e-8) {
+    return applyMatrixToVector(vector, matrix);
+  }
+
+  return [
+    (matrix.d * vector[0] - matrix.b * vector[1]) / determinant,
+    (-matrix.c * vector[0] + matrix.a * vector[1]) / determinant
+  ];
+}
+
+function matrixFromTransformSample(sample: TransformSample): FlashDisplayObjectState["matrix"] {
+  const radians = (sample.rotation * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const scaleX = (sample.scale[0] ?? 100) / 100;
+  const scaleY = (sample.scale[1] ?? 100) / 100;
+
+  return {
+    a: cos * scaleX,
+    b: sin * scaleX,
+    c: -sin * scaleY,
+    d: cos * scaleY,
+    tx: sample.position[0] ?? 0,
+    ty: sample.position[1] ?? 0
+  };
+}
+
+function applyPixelMatrixToPoint(
+  point: [number, number],
+  matrix: FlashDisplayObjectState["matrix"]
+): [number, number] {
+  return [
+    matrix.a * point[0] + matrix.c * point[1] + matrix.tx,
+    matrix.b * point[0] + matrix.d * point[1] + matrix.ty
+  ];
+}
+
+function canMorphGeometries(
+  start: FlashShapePath["geometry"],
+  end: FlashShapePath["geometry"]
+): boolean {
+  return start.closed === end.closed &&
+    start.vertices.length === end.vertices.length &&
+    start.inTangents.length === end.inTangents.length &&
+    start.outTangents.length === end.outTangents.length;
+}
+
+function prepareMorphGeometryPair(
+  start: FlashShapePath["geometry"],
+  end: FlashShapePath["geometry"]
+): [FlashShapePath["geometry"], FlashShapePath["geometry"]] {
+  const normalizedStart = normalizeMorphGeometry(start);
+  const normalizedEnd = normalizeMorphGeometry(end);
+
+  if (!canMorphGeometries(normalizedStart, normalizedEnd)) {
+    return [normalizedStart, normalizedEnd];
+  }
+
+  return [normalizedStart, alignMorphGeometry(normalizedStart, normalizedEnd)];
+}
+
+function normalizeMorphGeometry(geometry: FlashShapePath["geometry"]): FlashShapePath["geometry"] {
+  if (!geometry.closed || geometry.vertices.length % 2 !== 0) {
+    return geometry;
+  }
+
+  const half = geometry.vertices.length / 2;
+  const repeatedVertices = geometry.vertices.slice(0, half).every((point, index) =>
+    pointsApproximatelyEqual(point, geometry.vertices[index + half] ?? point)
+  );
+  const repeatedInTangents = geometry.inTangents.slice(0, half).every((point, index) =>
+    pointsApproximatelyEqual(point, geometry.inTangents[index + half] ?? point)
+  );
+  const repeatedOutTangents = geometry.outTangents.slice(0, half).every((point, index) =>
+    pointsApproximatelyEqual(point, geometry.outTangents[index + half] ?? point)
+  );
+
+  if (!repeatedVertices || !repeatedInTangents || !repeatedOutTangents) {
+    return geometry;
+  }
+
+  return {
+    closed: geometry.closed,
+    vertices: geometry.vertices.slice(0, half),
+    inTangents: geometry.inTangents.slice(0, half),
+    outTangents: geometry.outTangents.slice(0, half)
+  };
+}
+
+function interpolateGeometry(
+  start: FlashShapePath["geometry"],
+  end: FlashShapePath["geometry"],
+  ratio: number
+): FlashShapePath["geometry"] {
+  return {
+    closed: start.closed,
+    vertices: start.vertices.map((point, index) => interpolatePoint(point, end.vertices[index] ?? point, ratio)),
+    inTangents: start.inTangents.map((point, index) => interpolatePoint(point, end.inTangents[index] ?? point, ratio)),
+    outTangents: start.outTangents.map((point, index) => interpolatePoint(point, end.outTangents[index] ?? point, ratio))
+  };
+}
+
+function interpolateMorphPath(path: FlashMorphShapePath, ratio: number): FlashShapePath {
+  const fill = interpolateMorphFill(path.start.fill, path.end.fill, ratio);
+  const stroke = interpolateMorphStroke(path.start.stroke, path.end.stroke, ratio);
+  const [startGeometry, endGeometry] = prepareMorphGeometryPair(path.start.geometry, path.end.geometry);
+
+  return {
+    closed: path.start.closed,
+    commands: path.start.commands,
+    geometry: canMorphGeometries(startGeometry, endGeometry)
+      ? interpolateGeometry(startGeometry, endGeometry, ratio)
+      : startGeometry,
+    ...(fill !== undefined ? { fill } : {}),
+    ...(stroke !== undefined ? { stroke } : {})
+  };
+}
+
+function interpolateMorphFill(
+  startFill: FlashShapePath["fill"],
+  endFill: FlashShapePath["fill"],
+  ratio: number
+): FlashShapePath["fill"] | undefined {
+  if (!startFill || !endFill) {
+    return startFill ?? endFill;
+  }
+
+  if (startFill.kind === "solid" && endFill.kind === "solid") {
+    return {
+      kind: "solid",
+      color: rgbToHexVector(interpolateColorVector(startFill.color, endFill.color, ratio)),
+      alpha: interpolateNumber(startFill.alpha, endFill.alpha, ratio)
+    };
+  }
+
+  return startFill;
+}
+
+function interpolateMorphStroke(
+  startStroke: FlashShapePath["stroke"],
+  endStroke: FlashShapePath["stroke"],
+  ratio: number
+): FlashShapePath["stroke"] | undefined {
+  if (!startStroke || !endStroke || startStroke.kind !== "solid" || endStroke.kind !== "solid") {
+    return startStroke ?? endStroke;
+  }
+
+  return {
+    kind: "solid",
+    width: interpolateNumber(startStroke.width, endStroke.width, ratio),
+    color: rgbToHexVector(interpolateColorVector(startStroke.color, endStroke.color, ratio)),
+    alpha: interpolateNumber(startStroke.alpha, endStroke.alpha, ratio),
+    ...(startStroke.lineCap ? { lineCap: startStroke.lineCap } : {}),
+    ...(startStroke.lineJoin ? { lineJoin: startStroke.lineJoin } : {}),
+    ...(startStroke.miterLimit !== undefined ? { miterLimit: startStroke.miterLimit } : {})
+  };
+}
+
+function interpolatePoint(
+  start: [number, number],
+  end: [number, number],
+  ratio: number
+): [number, number] {
+  return [
+    interpolateNumber(start[0], end[0], ratio),
+    interpolateNumber(start[1], end[1], ratio)
+  ];
+}
+
+function pointsApproximatelyEqual(
+  left: [number, number],
+  right: [number, number],
+  epsilon = 1e-4
+): boolean {
+  return approximatelyEqual(left[0], right[0], epsilon) && approximatelyEqual(left[1], right[1], epsilon);
+}
+
+function alignMorphGeometry(
+  start: FlashShapePath["geometry"],
+  end: FlashShapePath["geometry"]
+): FlashShapePath["geometry"] {
+  const direct = bestShiftedGeometry(start, end);
+  const reversed = bestShiftedGeometry(start, reverseGeometry(end));
+
+  return geometryDistanceScore(start, direct) <= geometryDistanceScore(start, reversed)
+    ? direct
+    : reversed;
+}
+
+function bestShiftedGeometry(
+  start: FlashShapePath["geometry"],
+  end: FlashShapePath["geometry"]
+): FlashShapePath["geometry"] {
+  let best = end;
+  let bestScore = geometryDistanceScore(start, end);
+
+  for (let shift = 1; shift < end.vertices.length; shift += 1) {
+    const candidate = shiftGeometry(end, shift);
+    const score = geometryDistanceScore(start, candidate);
+    if (score < bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  return best;
+}
+
+function shiftGeometry(
+  geometry: FlashShapePath["geometry"],
+  shift: number
+): FlashShapePath["geometry"] {
+  return {
+    closed: geometry.closed,
+    vertices: rotateArray(geometry.vertices, shift),
+    inTangents: rotateArray(geometry.inTangents, shift),
+    outTangents: rotateArray(geometry.outTangents, shift)
+  };
+}
+
+function reverseGeometry(geometry: FlashShapePath["geometry"]): FlashShapePath["geometry"] {
+  return {
+    closed: geometry.closed,
+    vertices: [...geometry.vertices].reverse(),
+    inTangents: [...geometry.outTangents].reverse().map(([x, y]) => ([-x, -y] as [number, number])),
+    outTangents: [...geometry.inTangents].reverse().map(([x, y]) => ([-x, -y] as [number, number]))
+  };
+}
+
+function geometryDistanceScore(
+  start: FlashShapePath["geometry"],
+  end: FlashShapePath["geometry"]
+): number {
+  return start.vertices.reduce((sum, point, index) => {
+    const target = end.vertices[index] ?? point;
+    const dx = point[0] - target[0];
+    const dy = point[1] - target[1];
+    return sum + dx * dx + dy * dy;
+  }, 0);
+}
+
+function rotateArray<T>(values: T[], shift: number): T[] {
+  const offset = ((shift % values.length) + values.length) % values.length;
+  return values.slice(offset).concat(values.slice(0, offset));
+}
+
+function interpolateNumber(start: number, end: number, ratio: number): number {
+  return start + (end - start) * ratio;
+}
+
+function interpolateColorVector(
+  startHex: string,
+  endHex: string,
+  ratio: number
+): [number, number, number, number] {
+  const start = colorVector(startHex);
+  const end = colorVector(endHex);
+  return [
+    interpolateNumber(start[0], end[0], ratio),
+    interpolateNumber(start[1], end[1], ratio),
+    interpolateNumber(start[2], end[2], ratio),
+    1
+  ];
+}
+
+function rgbToHexVector(color: [number, number, number, number]): string {
+  return rgbToHex(color[0] * 255, color[1] * 255, color[2] * 255);
+}
+
 function mod(value: number, length: number): number {
   return ((value % length) + length) % length;
+}
+
+function firstMaskLayerId(samples: Array<FlashDisplayObjectState | null>): string | undefined {
+  const ids = new Set(
+    samples
+      .map((sample) => sample?.maskLayerId)
+      .filter((value): value is string => Boolean(value))
+  );
+
+  if (ids.size === 0) {
+    return undefined;
+  }
+
+  return ids.values().next().value;
 }
 
 function exportFillColorProperty(
@@ -970,20 +1638,16 @@ function exportFillColorProperty(
     frame: sample.frame,
     value: colorVector(applyColorTransformToHex(fill.color, sample.colorTransform))
   }));
-  const uniqueValues = new Set(keyframes.map((keyframe) => keyframe.value.join(",")));
+  const compressed = compressVectorKeyframes(keyframes, 1 / 1024);
+  const uniqueValues = new Set(compressed.map((keyframe) => keyframe.value.join(",")));
 
   if (uniqueValues.size <= 1) {
-    return { a: 0, k: keyframes[0]?.value ?? colorVector(fill.color) };
+    return { a: 0, k: compressed[0]?.value ?? colorVector(fill.color) };
   }
 
   return {
     a: 1,
-    k: keyframes.map((keyframe, index) => ({
-      t: keyframe.frame,
-      s: keyframe.value,
-      h: 1,
-      ...(index < keyframes.length - 1 ? { e: keyframes[index + 1]?.value ?? keyframe.value } : {})
-    }))
+    k: compressed.map((keyframe, index) => exportAnimatedVectorKeyframe(keyframe, compressed[index + 1]))
   };
 }
 
@@ -1036,4 +1700,188 @@ function rgbToHex(red: number, green: number, blue: number): string {
 
 function toHex(value: number): string {
   return clamp(Math.round(value), 0, 255).toString(16).padStart(2, "0");
+}
+
+function lineCapToLottie(lineCap: FlashSolidStroke["lineCap"]): number {
+  if (lineCap === "butt") {
+    return 1;
+  }
+
+  if (lineCap === "square") {
+    return 3;
+  }
+
+  return 2;
+}
+
+function lineJoinToLottie(lineJoin: FlashSolidStroke["lineJoin"]): number {
+  if (lineJoin === "bevel") {
+    return 3;
+  }
+
+  if (lineJoin === "miter") {
+    return 1;
+  }
+
+  return 2;
+}
+
+function sortShapeGroups(groups: Record<string, unknown>[]): Record<string, unknown>[] {
+  return groups.slice().sort((left, right) => shapeGroupPriority(left) - shapeGroupPriority(right));
+}
+
+function shapeGroupPriority(group: Record<string, unknown>): number {
+  const items = Array.isArray(group.it) ? group.it as Array<Record<string, unknown>> : [];
+  const hasStroke = items.some((item) => item.ty === "st");
+  const hasFill = items.some((item) => item.ty === "fl" || item.ty === "gf");
+
+  if (hasStroke && !hasFill) {
+    return 0;
+  }
+
+  if (hasStroke && hasFill) {
+    return 1;
+  }
+
+  return 2;
+}
+
+function minimumOutPoint(outPoint: number, inPoint = 0): number {
+  return Math.max(outPoint, inPoint + 2);
+}
+
+function compressScalarKeyframes(keyframes: ScalarKeySample[], epsilon: number): ScalarKeySample[] {
+  return compressKeyframes(keyframes, (left, right) => approximatelyEqual(left, right, epsilon));
+}
+
+function compressVectorKeyframes(keyframes: VectorKeySample[], epsilon: number): VectorKeySample[] {
+  return compressKeyframes(keyframes, (left, right) => arraysApproximatelyEqual(left, right, epsilon));
+}
+
+function compressKeyframes<T extends ScalarKeySample | VectorKeySample>(
+  keyframes: T[],
+  valuesEqual: (left: T["value"], right: T["value"]) => boolean
+): T[] {
+  if (keyframes.length <= 2) {
+    return keyframes;
+  }
+
+  const compressed: T[] = [keyframes[0] as T];
+
+  for (let index = 1; index < keyframes.length - 1; index += 1) {
+    const previous = compressed[compressed.length - 1];
+    const current = keyframes[index];
+    const next = keyframes[index + 1];
+
+    if (
+      previous &&
+      current &&
+      next &&
+      isRedundantLinearSample(previous, current, next, valuesEqual)
+    ) {
+      continue;
+    }
+
+    compressed.push(current as T);
+  }
+
+  compressed.push(keyframes[keyframes.length - 1] as T);
+  return compressed;
+}
+
+function isRedundantLinearSample<T extends ScalarKeySample | VectorKeySample>(
+  previous: T,
+  current: T,
+  next: T,
+  valuesEqual: (left: T["value"], right: T["value"]) => boolean
+): boolean {
+  const frameSpan = next.frame - previous.frame;
+  if (frameSpan <= 0) {
+    return false;
+  }
+
+  const ratio = (current.frame - previous.frame) / frameSpan;
+  if (ratio <= 0 || ratio >= 1) {
+    return false;
+  }
+
+  const expected = interpolateValue(previous.value, next.value, ratio) as T["value"];
+  return valuesEqual(current.value, expected);
+}
+
+function interpolateValue(left: number | number[], right: number | number[], ratio: number): number | number[] {
+  if (typeof left === "number" && typeof right === "number") {
+    return left + (right - left) * ratio;
+  }
+
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.map((value, index) => value + ((right[index] ?? value) - value) * ratio);
+  }
+
+  return left;
+}
+
+function exportAnimatedScalarKeyframe(
+  keyframe: ScalarKeySample,
+  next: ScalarKeySample | undefined
+): Record<string, unknown> {
+  if (!next) {
+    return {
+      t: keyframe.frame,
+      s: [keyframe.value]
+    };
+  }
+
+  return {
+    t: keyframe.frame,
+    s: [keyframe.value],
+    e: [next.value],
+    i: {
+      x: [1],
+      y: [1]
+    },
+    o: {
+      x: [0],
+      y: [0]
+    }
+  };
+}
+
+function exportAnimatedVectorKeyframe(
+  keyframe: VectorKeySample,
+  next: VectorKeySample | undefined
+): Record<string, unknown> {
+  if (!next) {
+    return {
+      t: keyframe.frame,
+      s: keyframe.value
+    };
+  }
+
+  const dimensions = keyframe.value.length;
+  return {
+    t: keyframe.frame,
+    s: keyframe.value,
+    e: next.value,
+    i: {
+      x: Array.from({ length: dimensions }, () => 1),
+      y: Array.from({ length: dimensions }, () => 1)
+    },
+    o: {
+      x: Array.from({ length: dimensions }, () => 0),
+      y: Array.from({ length: dimensions }, () => 0)
+    }
+  };
+}
+
+function arraysApproximatelyEqual(left: number[], right: number[], epsilon: number): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((value, index) => approximatelyEqual(value, right[index] ?? Number.NaN, epsilon));
+}
+
+function approximatelyEqual(left: number, right: number, epsilon = 1e-4): boolean {
+  return Math.abs(left - right) <= epsilon;
 }

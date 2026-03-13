@@ -38,6 +38,18 @@ export interface FlashGradientFill {
 
 export type FlashFill = FlashSolidFill | FlashGradientFill;
 
+export interface FlashSolidStroke {
+  kind: "solid";
+  width: number;
+  color: string;
+  alpha: number;
+  lineCap?: "butt" | "round" | "square";
+  lineJoin?: "miter" | "round" | "bevel";
+  miterLimit?: number;
+}
+
+export type FlashStroke = FlashSolidStroke;
+
 export interface FlashShapeGeometry {
   vertices: [number, number][];
   inTangents: [number, number][];
@@ -50,12 +62,24 @@ export interface FlashShapePath {
   commands: string[];
   geometry: FlashShapeGeometry;
   fill?: FlashFill;
+  stroke?: FlashStroke;
+}
+
+export interface FlashMorphShapePath {
+  start: FlashShapePath;
+  end: FlashShapePath;
 }
 
 export interface FlashShapeSymbol {
   kind: "shape";
   id: string;
   paths: FlashShapePath[];
+}
+
+export interface FlashMorphShapeSymbol {
+  kind: "morphshape";
+  id: string;
+  paths: FlashMorphShapePath[];
 }
 
 export interface FlashDisplayObjectState {
@@ -65,6 +89,7 @@ export interface FlashDisplayObjectState {
   name?: string;
   matrix: FlashMatrix;
   colorTransform: FlashColorTransform;
+  ratio?: number;
   maskLayerId?: string;
   isMask?: boolean;
 }
@@ -86,7 +111,7 @@ export interface FlashMovieClipSymbol {
   timeline: FlashTimeline;
 }
 
-export type FlashSymbol = FlashShapeSymbol | FlashMovieClipSymbol;
+export type FlashSymbol = FlashShapeSymbol | FlashMorphShapeSymbol | FlashMovieClipSymbol;
 
 export interface FlashDocument {
   version: number;

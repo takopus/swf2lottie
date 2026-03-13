@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, resolve } from "node:path";
 
 import { convertSwfToLottie } from "../core/convert.js";
@@ -10,12 +10,17 @@ const port = Number.parseInt(process.env.PORT ?? "4173", 10);
 const rootDir = resolve(process.cwd());
 const webDir = resolve(rootDir, "src", "web");
 const outDir = resolve(rootDir, "out", "manual");
+const fixturesOutDir = resolve(rootDir, "out");
 const lottiePlayerPath = resolve(rootDir, "node_modules", "lottie-web", "build", "player", "lottie.min.js");
 
 const staticFiles = new Map<string, { path: string; contentType: string }>([
   ["/", { path: resolve(webDir, "index.html"), contentType: "text/html; charset=utf-8" }],
   ["/app.js", { path: resolve(webDir, "app.js"), contentType: "text/javascript; charset=utf-8" }],
   ["/styles.css", { path: resolve(webDir, "styles.css"), contentType: "text/css; charset=utf-8" }],
+  ["/fixtures", { path: resolve(webDir, "fixtures.html"), contentType: "text/html; charset=utf-8" }],
+  ["/fixtures/", { path: resolve(webDir, "fixtures.html"), contentType: "text/html; charset=utf-8" }],
+  ["/fixtures.js", { path: resolve(webDir, "fixtures.js"), contentType: "text/javascript; charset=utf-8" }],
+  ["/fixtures.css", { path: resolve(webDir, "fixtures.css"), contentType: "text/css; charset=utf-8" }],
   ["/vendor/lottie.min.js", { path: lottiePlayerPath, contentType: "text/javascript; charset=utf-8" }]
 ]);
 
@@ -25,17 +30,38 @@ createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? "/", `http://${host}:${port}`);
 
+    if (request.method === "POST" && url.pathname === "/api/convert") {
+      await handleConvertRequest(request, response, url);
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/fixtures") {
+      sendJson(response, 200, {
+        fixtures: listExportedFixtures()
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/api/fixture-json/")) {
+      const filename = decodeURIComponent(url.pathname.slice("/api/fixture-json/".length));
+      const safeName = sanitizeFixtureJsonName(filename);
+
+      if (!safeName) {
+        sendJson(response, 404, { message: "Fixture JSON not found." });
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      response.end(readFileSync(resolve(fixturesOutDir, safeName)));
+      return;
+    }
+
     if (request.method === "GET") {
       if (serveStatic(url.pathname, response)) {
         return;
       }
 
       sendJson(response, 404, { message: "Not found." });
-      return;
-    }
-
-    if (request.method === "POST" && url.pathname === "/api/convert") {
-      await handleConvertRequest(request, response, url);
       return;
     }
 
@@ -147,7 +173,75 @@ function sanitizeFilename(filename: string): string {
   return cleaned.toLowerCase().endsWith(".swf") ? cleaned : `${cleaned}.swf`;
 }
 
+function sanitizeFixtureJsonName(filename: string): string | null {
+  const cleaned = filename.replace(/[^A-Za-z0-9._-]/g, "_");
+  if (
+    !cleaned.toLowerCase().endsWith(".json") ||
+    cleaned.toLowerCase().endsWith(".meta.json") ||
+    cleaned.toLowerCase().endsWith(".error.json")
+  ) {
+    return null;
+  }
+
+  const absolutePath = resolve(fixturesOutDir, cleaned);
+  try {
+    if (!statSync(absolutePath).isFile()) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+
+  return cleaned;
+}
+
 function sendJson(response: ServerResponse, statusCode: number, payload: unknown): void {
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
   response.end(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
+function listExportedFixtures(): Array<{ name: string; size: number; href: string }> {
+  return readdirSync(fixturesOutDir, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .filter((name) => name.toLowerCase().endsWith(".json"))
+    .filter((name) => !name.toLowerCase().endsWith(".meta.json"))
+    .filter((name) => !name.toLowerCase().endsWith(".error.json"))
+    .map((name) => {
+      const absolutePath = resolve(fixturesOutDir, name);
+      return {
+        name,
+        size: statSync(absolutePath).size,
+        href: `/api/fixture-json/${encodeURIComponent(name)}`
+      };
+    })
+    .sort(compareFixtureExports);
+}
+
+function compareFixtureExports(
+  left: { name: string; size: number; href: string },
+  right: { name: string; size: number; href: string }
+): number {
+  const leftNumber = extractFixtureSequence(left.name);
+  const rightNumber = extractFixtureSequence(right.name);
+
+  if (leftNumber !== null && rightNumber !== null && leftNumber !== rightNumber) {
+    return rightNumber - leftNumber;
+  }
+
+  if (leftNumber !== null && rightNumber === null) {
+    return -1;
+  }
+
+  if (leftNumber === null && rightNumber !== null) {
+    return 1;
+  }
+
+  return right.name.localeCompare(left.name);
+}
+
+function extractFixtureSequence(filename: string): number | null {
+  const match = /testswf(\d+)/i.exec(filename);
+  const value = match?.[1];
+  return value ? Number.parseInt(value, 10) : null;
 }

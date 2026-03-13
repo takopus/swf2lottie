@@ -1,11 +1,12 @@
 import { BinaryReader } from "./binary-reader.js";
 import { BitReader } from "./bit-reader.js";
-import { parseDefineShapeTag } from "./shape-parser.js";
+import { parseDefineMorphShapeTag, parseDefineShapeTag } from "./shape-parser.js";
 import { SWF_TAG_NAMES } from "./tag-names.js";
 import type {
   SwfBackgroundColorTag,
   SwfControlTag,
   SwfDefineShapeTag,
+  SwfDefineMorphShapeTag,
   SwfDefineSpriteTag,
   SwfFileAttributesTag,
   SwfPlaceObjectTag,
@@ -62,6 +63,9 @@ function readTag(buffer: ArrayBuffer, code: number, length: number, bodyOffset: 
     case 32:
     case 83:
       return readDefineShapeTag(buffer, code, length, bodyOffset);
+    case 46:
+    case 84:
+      return readDefineMorphShapeTag(buffer, code, bodyOffset);
     case 9:
       return readBackgroundColorTag(buffer, bodyOffset);
     case 26:
@@ -84,6 +88,20 @@ function readDefineShapeTag(
   bodyOffset: number
 ): SwfDefineShapeTag {
   const shape = parseDefineShapeTag(buffer, code, bodyOffset);
+
+  return {
+    code,
+    characterId: shape.characterId,
+    paths: shape.paths
+  };
+}
+
+function readDefineMorphShapeTag(
+  buffer: ArrayBuffer,
+  code: 46 | 84,
+  bodyOffset: number
+): SwfDefineMorphShapeTag {
+  const shape = parseDefineMorphShapeTag(buffer, code, bodyOffset);
 
   return {
     code,
@@ -130,6 +148,8 @@ function readPlaceObject2Tag(buffer: ArrayBuffer, bodyOffset: number): SwfPlaceO
 
   const depth = reader.readUi16();
   const characterId = hasCharacter ? reader.readUi16() : undefined;
+  let ratio: number | undefined;
+  let clipDepth: number | undefined;
   const matrix = hasMatrix ? readMatrix(buffer, reader.position) : undefined;
   if (matrix) {
     reader.skip(matrix.byteLength);
@@ -141,7 +161,7 @@ function readPlaceObject2Tag(buffer: ArrayBuffer, bodyOffset: number): SwfPlaceO
   }
 
   if (hasRatio) {
-    reader.readUi16();
+    ratio = reader.readUi16();
   }
 
   const name = hasName ? readSwfString(buffer, reader.position) : undefined;
@@ -150,7 +170,7 @@ function readPlaceObject2Tag(buffer: ArrayBuffer, bodyOffset: number): SwfPlaceO
   }
 
   if (hasClipDepth) {
-    reader.readUi16();
+    clipDepth = reader.readUi16();
   }
 
   if (hasClipActions) {
@@ -162,6 +182,8 @@ function readPlaceObject2Tag(buffer: ArrayBuffer, bodyOffset: number): SwfPlaceO
     depth,
     hasMove,
     ...(characterId !== undefined ? { characterId } : {}),
+    ...(ratio !== undefined ? { ratio } : {}),
+    ...(clipDepth !== undefined ? { clipDepth } : {}),
     ...(matrix
       ? {
           matrix: {

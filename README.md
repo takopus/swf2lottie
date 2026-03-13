@@ -96,3 +96,7 @@ The command writes output files to `out/`:
 
 - `*.json` for successful conversions;
 - `*.error.json` for structured conversion failures.
+
+## Known limitation
+
+- One line-style edge case is still intentionally left unresolved: a Flash-authored line that behaves like a point-pattern/shape-filled stroke is not reproduced yet as an exact `Lottie` equivalent. Ordinary solid strokes are supported.

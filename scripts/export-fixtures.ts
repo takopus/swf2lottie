@@ -14,8 +14,10 @@ if (!requestedFixture) {
 }
 mkdirSync(outDir, { recursive: true });
 
-const fixtures = loadSwfFixtures(fixturesDir).filter((fixture) =>
-  requestedFixture ? fixture.name === requestedFixture : true
+const allFixtures = loadSwfFixtures(fixturesDir);
+const resolvedFixtureName = resolveRequestedFixtureName(requestedFixture, allFixtures.map((fixture) => fixture.name));
+const fixtures = allFixtures.filter((fixture) =>
+  resolvedFixtureName ? fixture.name === resolvedFixtureName : true
 );
 
 if (requestedFixture && fixtures.length === 0) {
@@ -86,4 +88,39 @@ for (const fixture of fixtures) {
 
     throw error;
   }
+}
+
+function resolveRequestedFixtureName(
+  requestedFixture: string | undefined,
+  fixtureNames: string[]
+): string | undefined {
+  if (!requestedFixture) {
+    return undefined;
+  }
+
+  const exactMatch = fixtureNames.find((fixtureName) => fixtureName === requestedFixture);
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  if (!/^\d+$/.test(requestedFixture)) {
+    return requestedFixture;
+  }
+
+  const prefix = `testswf${requestedFixture}`;
+  const matches = fixtureNames.filter((fixtureName) => fixtureName.startsWith(prefix));
+
+  if (matches.length === 1) {
+    return matches[0];
+  }
+
+  if (matches.length > 1) {
+    process.stderr.write(
+      `Fixture number ${requestedFixture} is ambiguous: ${matches.join(", ")}\n`
+    );
+    process.exitCode = 1;
+    process.exit();
+  }
+
+  return requestedFixture;
 }
