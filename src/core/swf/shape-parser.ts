@@ -22,7 +22,9 @@ interface MorphShapeTagParseResult {
 
 interface ParsedShapeRecordSegment {
   styleKind: "fill" | "stroke";
-  styleIndex: number;
+  styleKey: string;
+  fill?: FlashFill;
+  stroke?: FlashStroke | null;
   startX: number;
   startY: number;
   endX: number;
@@ -164,8 +166,9 @@ function readShapeRecords(
   let fillStyle0 = initialStyleSelection?.fillStyle0 ?? 0;
   let fillStyle1 = initialStyleSelection?.fillStyle1 ?? 0;
   let lineStyle = initialStyleSelection?.lineStyle ?? 0;
-  const fillStyleState = [...initialFillStyles];
-  const lineStyleState = [...initialLineStyles];
+  let fillStyleState = [...initialFillStyles];
+  let lineStyleState = [...initialLineStyles];
+  let styleEpoch = 0;
   const segments: ParsedShapeRecordSegment[] = [];
 
   while (true) {
@@ -216,33 +219,30 @@ function readShapeRecords(
 
         if (shapeCode === 46 || shapeCode === 84) {
           const nestedFillStyles = readMorphFillStyleArray(buffer, bits.offset, shapeCode);
-          fillStyleState.push(
-            ...(morphSide === "end" ? nestedFillStyles.endValues : nestedFillStyles.startValues)
-          );
+          fillStyleState = morphSide === "end" ? [...nestedFillStyles.endValues] : [...nestedFillStyles.startValues];
           const nestedLineStyles = readMorphLineStyleArray(
             buffer,
             bits.offset + nestedFillStyles.byteLength,
             shapeCode
           );
-          lineStyleState.push(
-            ...(morphSide === "end" ? nestedLineStyles.endValues : nestedLineStyles.startValues)
-          );
+          lineStyleState = morphSide === "end" ? [...nestedLineStyles.endValues] : [...nestedLineStyles.startValues];
           nextStyleOffset = bits.offset + nestedFillStyles.byteLength + nestedLineStyles.byteLength;
         } else {
           const nestedFillStyles = readFillStyleArray(buffer, bits.offset, shapeCode);
-          fillStyleState.push(...nestedFillStyles.values);
+          fillStyleState = [...nestedFillStyles.values];
           const nestedLineStyles = readLineStyleArray(
             buffer,
             bits.offset + nestedFillStyles.byteLength,
             shapeCode
           );
-          lineStyleState.push(...nestedLineStyles.values);
+          lineStyleState = [...nestedLineStyles.values];
           nextStyleOffset = bits.offset + nestedFillStyles.byteLength + nestedLineStyles.byteLength;
         }
 
         bits.setOffset(nextStyleOffset);
         numFillBits = bits.readUnsigned(4);
         numLineBits = bits.readUnsigned(4);
+        styleEpoch += 1;
         fillStyle0 = 0;
         fillStyle1 = 0;
         lineStyle = 0;
@@ -273,7 +273,19 @@ function readShapeRecords(
 
       const nextX = currentX + deltaX;
       const nextY = currentY + deltaY;
-      pushSegments(segments, fillStyle0, fillStyle1, lineStyle, currentX, currentY, nextX, nextY);
+      pushSegments(
+        segments,
+        fillStyleState,
+        lineStyleState,
+        styleEpoch,
+        fillStyle0,
+        fillStyle1,
+        lineStyle,
+        currentX,
+        currentY,
+        nextX,
+        nextY
+      );
       currentX = nextX;
       currentY = nextY;
       continue;
@@ -289,7 +301,21 @@ function readShapeRecords(
     const nextX = controlX + anchorDeltaX;
     const nextY = controlY + anchorDeltaY;
 
-    pushSegments(segments, fillStyle0, fillStyle1, lineStyle, currentX, currentY, nextX, nextY, controlX, controlY);
+    pushSegments(
+      segments,
+      fillStyleState,
+      lineStyleState,
+      styleEpoch,
+      fillStyle0,
+      fillStyle1,
+      lineStyle,
+      currentX,
+      currentY,
+      nextX,
+      nextY,
+      controlX,
+      controlY
+    );
     currentX = nextX;
     currentY = nextY;
   }
@@ -304,6 +330,9 @@ function readShapeRecords(
 
 function pushSegments(
   target: ParsedShapeRecordSegment[],
+  fillStyles: FlashFill[],
+  lineStyles: Array<FlashStroke | null>,
+  styleEpoch: number,
   fillStyle0: number,
   fillStyle1: number,
   lineStyle: number,
@@ -315,51 +344,63 @@ function pushSegments(
   controlY?: number
 ): void {
   if (fillStyle1 > 0) {
+    const fill = fillStyles[fillStyle1 - 1];
+    if (fill) {
     target.push({
       styleKind: "fill",
-      styleIndex: fillStyle1,
+      styleKey: `fill:${styleEpoch}:${fillStyle1}`,
+      fill,
       startX,
       startY,
       endX,
       endY,
       ...(controlX !== undefined && controlY !== undefined ? { controlX, controlY } : {})
     });
+    }
   }
 
   if (fillStyle0 > 0) {
+    const fill = fillStyles[fillStyle0 - 1];
+    if (fill) {
     target.push({
       styleKind: "fill",
-      styleIndex: fillStyle0,
+      styleKey: `fill:${styleEpoch}:${fillStyle0}`,
+      fill,
       startX: endX,
       startY: endY,
       endX: startX,
       endY: startY,
       ...(controlX !== undefined && controlY !== undefined ? { controlX, controlY } : {})
     });
+    }
   }
 
   if (lineStyle > 0) {
+    const stroke = lineStyles[lineStyle - 1];
+    if (stroke) {
     target.push({
       styleKind: "stroke",
-      styleIndex: lineStyle,
+      styleKey: `stroke:${styleEpoch}:${lineStyle}`,
+      stroke,
       startX,
       startY,
       endX,
       endY,
       ...(controlX !== undefined && controlY !== undefined ? { controlX, controlY } : {})
     });
+    }
   }
 }
 
 function buildPathsFromSegments(
-  fillStyles: FlashFill[],
-  lineStyles: Array<FlashStroke | null>,
+  _fillStyles: FlashFill[],
+  _lineStyles: Array<FlashStroke | null>,
   segments: ParsedShapeRecordSegment[]
 ): FlashShapePath[] {
   const grouped = new Map<string, ParsedShapeRecordSegment[]>();
 
   for (const segment of segments) {
-    const key = `${segment.styleKind}:${segment.styleIndex}`;
+    const key = segment.styleKey;
     const list = grouped.get(key) ?? [];
     list.push(segment);
     grouped.set(key, list);
@@ -368,10 +409,9 @@ function buildPathsFromSegments(
   const paths: FlashShapePath[] = [];
 
   for (const [key, styleSegments] of grouped) {
-    const [styleKind, styleIndexValue] = key.split(":");
-    const styleIndex = Number.parseInt(styleIndexValue ?? "0", 10);
-    const fill = styleKind === "fill" ? fillStyles[styleIndex - 1] : undefined;
-    const stroke = styleKind === "stroke" ? lineStyles[styleIndex - 1] : undefined;
+    const first = styleSegments[0];
+    const fill = first?.styleKind === "fill" ? first.fill : undefined;
+    const stroke = first?.styleKind === "stroke" ? first.stroke ?? undefined : undefined;
 
     if (!fill && !stroke) {
       continue;
@@ -527,7 +567,7 @@ function readFillStyle(
     };
   }
 
-  if (fillStyleType === 0x10 || fillStyleType === 0x12) {
+  if (fillStyleType === 0x10 || fillStyleType === 0x12 || fillStyleType === 0x13) {
     const matrix = readMatrix(buffer, reader.position);
     const gradient = readGradient(buffer, reader.position + matrix.byteLength, shapeCode, fillStyleType);
 
@@ -535,7 +575,8 @@ function readFillStyle(
       value: {
         kind: fillStyleType === 0x10 ? "linear-gradient" : "radial-gradient",
         matrix: matrix.value,
-        stops: gradient.stops
+        stops: gradient.stops,
+        ...(gradient.focalPoint !== undefined ? { focalPoint: gradient.focalPoint } : {})
       },
       byteLength: 1 + matrix.byteLength + gradient.byteLength
     };
@@ -558,6 +599,7 @@ function readGradient(
   fillStyleType: number
 ): {
   stops: FlashGradientStop[];
+  focalPoint?: number;
   byteLength: number;
 } {
   const bytes = new Uint8Array(buffer);
@@ -582,12 +624,11 @@ function readGradient(
     });
   }
 
-  if (fillStyleType === 0x13) {
-    reader.readUi16();
-  }
+  const focalPoint = fillStyleType === 0x13 ? readSi16(reader) / 256 : undefined;
 
   return {
     stops,
+    ...(focalPoint !== undefined ? { focalPoint } : {}),
     byteLength: reader.position - startOffset
   };
 }
@@ -659,7 +700,7 @@ function readMorphFillStyle(
     };
   }
 
-  if (fillStyleType === 0x10 || fillStyleType === 0x12) {
+  if (fillStyleType === 0x10 || fillStyleType === 0x12 || fillStyleType === 0x13) {
     const startMatrix = readMatrix(buffer, reader.position);
     const endMatrix = readMatrix(buffer, reader.position + startMatrix.byteLength);
     const gradient = readMorphGradient(
@@ -672,12 +713,14 @@ function readMorphFillStyle(
       startValue: {
         kind: fillStyleType === 0x10 ? "linear-gradient" : "radial-gradient",
         matrix: startMatrix.value,
-        stops: gradient.startStops
+        stops: gradient.startStops,
+        ...(gradient.startFocalPoint !== undefined ? { focalPoint: gradient.startFocalPoint } : {})
       },
       endValue: {
         kind: fillStyleType === 0x10 ? "linear-gradient" : "radial-gradient",
         matrix: endMatrix.value,
-        stops: gradient.endStops
+        stops: gradient.endStops,
+        ...(gradient.endFocalPoint !== undefined ? { focalPoint: gradient.endFocalPoint } : {})
       },
       byteLength: 1 + startMatrix.byteLength + endMatrix.byteLength + gradient.byteLength
     };
@@ -697,6 +740,8 @@ function readMorphGradient(
 ): {
   startStops: FlashGradientStop[];
   endStops: FlashGradientStop[];
+  startFocalPoint?: number;
+  endFocalPoint?: number;
   byteLength: number;
 } {
   const bytes = new Uint8Array(buffer);
@@ -730,14 +775,14 @@ function readMorphGradient(
     });
   }
 
-  if (fillStyleType === 0x13) {
-    reader.readUi16();
-    reader.readUi16();
-  }
+  const startFocalPoint = fillStyleType === 0x13 ? readSi16(reader) / 256 : undefined;
+  const endFocalPoint = fillStyleType === 0x13 ? readSi16(reader) / 256 : undefined;
 
   return {
     startStops,
     endStops,
+    ...(startFocalPoint !== undefined ? { startFocalPoint } : {}),
+    ...(endFocalPoint !== undefined ? { endFocalPoint } : {}),
     byteLength: reader.position - startOffset
   };
 }
@@ -1073,6 +1118,11 @@ function readColor(
 
 function twipsToPixels(value: number): number {
   return value / 20;
+}
+
+function readSi16(reader: BinaryReader): number {
+  const value = reader.readUi16();
+  return value >= 0x8000 ? value - 0x10000 : value;
 }
 
 function arePointsEqual(ax: number, ay: number, bx: number, by: number): boolean {

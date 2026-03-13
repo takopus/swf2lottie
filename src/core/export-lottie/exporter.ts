@@ -991,10 +991,108 @@ function exportMorphFill(
     };
   }
 
+  if (
+    startFill.kind === "linear-gradient" &&
+    endFill.kind === "linear-gradient" &&
+    canMorphGradientStops(startFill, endFill)
+  ) {
+    const startKeyframes = samples
+      .map((sample, frame) => sample
+        ? {
+            frame,
+            value: gradientStartPoint(interpolateGradientFill(startFill, endFill, sample.ratio ?? 0))
+          }
+        : null)
+      .filter((value): value is { frame: number; value: [number, number] } => value !== null);
+    const endKeyframes = samples
+      .map((sample, frame) => sample
+        ? {
+            frame,
+            value: gradientEndPoint(interpolateGradientFill(startFill, endFill, sample.ratio ?? 0))
+          }
+        : null)
+      .filter((value): value is { frame: number; value: [number, number] } => value !== null);
+    const gradientKeyframes = samples
+      .map((sample, frame) => sample
+        ? {
+            frame,
+            value: flattenGradientStops(interpolateGradientFill(startFill, endFill, sample.ratio ?? 0))
+          }
+        : null)
+      .filter((value): value is { frame: number; value: number[] } => value !== null);
+
+    return {
+      ty: "gf",
+      o: { a: 0, k: 100 },
+      r: 1,
+      s: exportVectorProperty(startKeyframes),
+      e: exportVectorProperty(endKeyframes),
+      t: 1,
+      g: {
+        p: startFill.stops.length,
+        k: exportVectorProperty(gradientKeyframes)
+      }
+    };
+  }
+
+  if (
+    startFill.kind === "radial-gradient" &&
+    endFill.kind === "radial-gradient" &&
+    canMorphGradientStops(startFill, endFill)
+  ) {
+    const startKeyframes = samples
+      .map((sample, frame) => sample
+        ? {
+            frame,
+            value: gradientCenterPoint(interpolateGradientFill(startFill, endFill, sample.ratio ?? 0))
+          }
+        : null)
+      .filter((value): value is { frame: number; value: [number, number] } => value !== null);
+    const endKeyframes = samples
+      .map((sample, frame) => sample
+        ? {
+            frame,
+            value: gradientRadiusPoint(interpolateGradientFill(startFill, endFill, sample.ratio ?? 0))
+          }
+        : null)
+      .filter((value): value is { frame: number; value: [number, number] } => value !== null);
+    const gradientKeyframes = samples
+      .map((sample, frame) => sample
+        ? {
+            frame,
+            value: flattenGradientStops(interpolateGradientFill(startFill, endFill, sample.ratio ?? 0))
+          }
+        : null)
+      .filter((value): value is { frame: number; value: number[] } => value !== null);
+    const highlightKeyframes = samples
+      .map((sample, frame) => sample
+        ? {
+            frame,
+            value: clamp((interpolateGradientFill(startFill, endFill, sample.ratio ?? 0).focalPoint ?? 0) * 100, -100, 100)
+          }
+        : null)
+      .filter((value): value is { frame: number; value: number } => value !== null);
+
+    return {
+      ty: "gf",
+      o: { a: 0, k: 100 },
+      r: 1,
+      s: exportVectorProperty(startKeyframes),
+      e: exportVectorProperty(endKeyframes),
+      t: 2,
+      h: exportScalarProperty(highlightKeyframes),
+      a: { a: 0, k: 0 },
+      g: {
+        p: startFill.stops.length,
+        k: exportVectorProperty(gradientKeyframes)
+      }
+    };
+  }
+
   issues.push({
     code: "unsupported_fill",
     severity: "warning",
-    message: "Only solid morph fills are exported right now."
+    message: "Only compatible solid and gradient morph fills are exported right now."
   });
   return null;
 }
@@ -1102,7 +1200,7 @@ function exportRadialGradientFill(
     s: start,
     e: end,
     t: 2,
-    h: { a: 0, k: 0 },
+    h: { a: 0, k: clamp((fill.focalPoint ?? 0) * 100, -100, 100) },
     a: { a: 0, k: 0 },
     g: {
       p: fill.stops.length,
@@ -1112,6 +1210,22 @@ function exportRadialGradientFill(
       }
     }
   };
+}
+
+function gradientStartPoint(fill: FlashGradientFill): [number, number] {
+  return applyGradientMatrix(fill.matrix, -16384 / 20, 0);
+}
+
+function gradientEndPoint(fill: FlashGradientFill): [number, number] {
+  return applyGradientMatrix(fill.matrix, 16384 / 20, 0);
+}
+
+function gradientCenterPoint(fill: FlashGradientFill): [number, number] {
+  return applyGradientMatrix(fill.matrix, 0, 0);
+}
+
+function gradientRadiusPoint(fill: FlashGradientFill): [number, number] {
+  return applyGradientMatrix(fill.matrix, 16384 / 20, 0);
 }
 
 function exportGroupTransform(): Record<string, unknown> {
@@ -1474,7 +1588,53 @@ function interpolateMorphFill(
     };
   }
 
+  if (
+    startFill.kind !== "solid" &&
+    endFill.kind !== "solid" &&
+    startFill.kind === endFill.kind &&
+    canMorphGradientStops(startFill, endFill)
+  ) {
+    return interpolateGradientFill(startFill, endFill, ratio);
+  }
+
   return startFill;
+}
+
+function canMorphGradientStops(startFill: FlashGradientFill, endFill: FlashGradientFill): boolean {
+  return startFill.stops.length === endFill.stops.length;
+}
+
+function interpolateGradientFill(
+  startFill: FlashGradientFill,
+  endFill: FlashGradientFill,
+  ratio: number
+): FlashGradientFill {
+  return {
+    kind: startFill.kind,
+    matrix: {
+      a: interpolateNumber(startFill.matrix.a, endFill.matrix.a, ratio),
+      b: interpolateNumber(startFill.matrix.b, endFill.matrix.b, ratio),
+      c: interpolateNumber(startFill.matrix.c, endFill.matrix.c, ratio),
+      d: interpolateNumber(startFill.matrix.d, endFill.matrix.d, ratio),
+      tx: interpolateNumber(startFill.matrix.tx, endFill.matrix.tx, ratio),
+      ty: interpolateNumber(startFill.matrix.ty, endFill.matrix.ty, ratio)
+    },
+    stops: startFill.stops.map((startStop, index) => {
+      const endStop = endFill.stops[index] ?? startStop;
+      return {
+        offset: interpolateNumber(startStop.offset, endStop.offset, ratio),
+        color: rgbToHexVector(interpolateColorVector(startStop.color, endStop.color, ratio)),
+        alpha: interpolateNumber(startStop.alpha, endStop.alpha, ratio)
+      };
+    }),
+    ...(
+      startFill.kind === "radial-gradient" || endFill.kind === "radial-gradient"
+        ? {
+            focalPoint: interpolateNumber(startFill.focalPoint ?? 0, endFill.focalPoint ?? 0, ratio)
+          }
+        : {}
+    )
+  };
 }
 
 function interpolateMorphStroke(

@@ -1,51 +1,61 @@
-# swf2lottie
+# swf 2 lottie
 
-`swf2lottie` is a deterministic converter from a strict subset of Adobe Flash Player 10.3 `SWF` files to `Lottie`.
+## Disclaimer
+
+This project is entirely coded by OpenAI Codex. I did not even read the code yet. I give no warranties of any kind, project is provided as is. It currently in a working, but very early state.
+
+## Description
+
+`swf 2 lottie` is a deterministic converter from a strict subset of Adobe Flash Player 10.3 `SWF` files to `Lottie`.
 
 The project is intentionally narrow:
 
 - supported input is vector timeline data only;
-- supported timeline state includes nested display objects, transform matrix, alpha and tint color transform;
-- supported graphics include solid fills, gradients and primitive vector masks;
+- supported timeline state includes nested display objects, motion tweens, shape tweens and color effects: alpha, tint and brightness;
+- supported graphics include solid fills, gradients, solid strokes, most stroke styles and primitive vector masks;
 - unsupported features should produce explicit diagnostics, not heuristic output.
-
-## Why not rely on an existing SWF parser?
-
-At this stage, a project-specific parser is the better default.
-
-- Most JavaScript SWF parsers are old, incomplete, or designed for broad playback/emulation rather than strict conversion.
-- Mature SWF implementations exist, but many of the best maintained ones are embedded in runtimes or written in Rust rather than TypeScript.
-- This project needs a narrow, auditable parser for a specific subset of tags and records, with precise diagnostics for unsupported features.
-- A custom parser keeps the conversion pipeline deterministic and avoids carrying parsing complexity for ActionScript, raster assets, audio, filters and runtime behavior.
-
-The recommended strategy is:
-
-1. Build a small parser for the exact tag subset needed by the converter.
-2. Keep the parser isolated behind interfaces so it can be swapped later.
-3. Re-evaluate third-party parsing backends only if performance or spec coverage becomes a blocker.
 
 ## Architecture
 
+The project is written on TypeScript over Node.
 The codebase is split into small layers:
 
 - `src/core/swf`: binary reader and SWF parsing entrypoints;
 - `src/core/ir`: intermediate representation for Flash timeline data;
 - `src/core/validate`: subset validation and diagnostics;
 - `src/core/export-lottie`: deterministic Lottie export from validated IR;
-- `src/core/convert.ts`: orchestration entrypoint for future server, worker or CLI use.
+- `src/core/convert.ts`: orchestration entrypoint used by the preview server and fixture export scripts;
+- `src/server`: minimal local HTTP server for preview and fixture gallery;
+- `src/web`: minimal browser UI for manual conversion and inspection.
 
 ## Status
 
-This repository currently contains a typed core skeleton:
+The current implementation already includes:
 
-- document and timeline IR;
-- structured conversion issues;
-- parser/exporter interfaces and stubs;
-- subset validator;
-- conversion orchestration;
-- smoke tests for the current pipeline.
+- `SWF` header and tag parsing for the subset used by the current fixtures;
+- document and timeline IR with display list, transforms, color effects and morph ratio support;
+- deterministic export to `Lottie` for the currently supported subset;
+- structured diagnostics for unsupported features;
+- fixture-driven tests and local preview tooling.
 
-The next implementation step is adding real `SWF` tag parsing on top of the binary reader and fixtures.
+Supported on the current branch:
+
+- nested display object timelines;
+- motion tween style transform animation exported as `Lottie` keyframes;
+- shape tween / morph shape animation;
+- solid fills;
+- linear and radial gradients;
+- solid strokes;
+- simple vector masks;
+- alpha, tint and brightness color effects.
+
+Still intentionally out of scope and probably never will be supported:
+
+- raster assets;
+- audio;
+- ActionScript / runtime code;
+- filters, blend modes and other renderer-specific effects;
+- heuristic reconstruction of unsupported Flash features.
 
 ## Fixtures
 
@@ -84,6 +94,8 @@ Each browser conversion also writes files to `out/manual/`:
 - `*.meta.json` for source filename and issues;
 - `*.error.json` if conversion fails.
 
+There is also a fixture gallery at `http://127.0.0.1:4173/fixtures` which shows exported fixture JSON files in embedded `Lottie` players, activating on mouse over, in reverse date order, newest to oldest.
+
 ## Exporting fixture output
 
 To generate JSON results for every file from `fixtures/`, run:
@@ -97,6 +109,19 @@ The command writes output files to `out/`:
 - `*.json` for successful conversions;
 - `*.error.json` for structured conversion failures.
 
+To export a single fixture, run either:
+
+```bash
+npm run export:fixture -- testswf16-gradient-in-tween-2.swf
+```
+
+or the short numeric form:
+
+```bash
+npm run export:fixture -- 16
+```
+
 ## Known limitation
 
-- One line-style edge case is still intentionally left unresolved: a Flash-authored line that behaves like a point-pattern/shape-filled stroke is not reproduced yet as an exact `Lottie` equivalent. Ordinary solid strokes are supported.
+- Dotted line-style case is still intentionally left unresolved. It seems flash exports all styled lines as shapes actually, and for some reason fill of the dotted line-style gets not line color, but fill color of nearby (?) shape.
+- Elliptical radial gradients are not exported exactly. `Lottie` does not provide a direct equivalent of Flash gradient matrix deformation for radial fills, so those cases currently degrade to regular radial gradients.

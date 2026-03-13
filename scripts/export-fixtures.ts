@@ -28,12 +28,19 @@ if (requestedFixture && fixtures.length === 0) {
 
 for (const fixture of fixtures) {
   const stem = basename(fixture.name, ".swf");
+  const jsonPath = resolve(outDir, `${stem}.json`);
+  const metaPath = resolve(outDir, `${stem}.meta.json`);
+  const errorPath = resolve(outDir, `${stem}.error.json`);
+
+  rmSync(jsonPath, { force: true });
+  rmSync(metaPath, { force: true });
+  rmSync(errorPath, { force: true });
 
   try {
     const result = convertSwfToLottie(fixture.buffer);
     if (!result.animation) {
       writeFileSync(
-        resolve(outDir, `${stem}.error.json`),
+        errorPath,
         `${JSON.stringify(
           {
             source: fixture.name,
@@ -50,12 +57,12 @@ for (const fixture of fixtures) {
     }
 
     writeFileSync(
-      resolve(outDir, `${stem}.json`),
+      jsonPath,
       `${JSON.stringify(result.animation, null, 2)}\n`,
       "utf8"
     );
     writeFileSync(
-      resolve(outDir, `${stem}.meta.json`),
+      metaPath,
       `${JSON.stringify(
         {
           source: fixture.name,
@@ -70,7 +77,7 @@ for (const fixture of fixtures) {
   } catch (error) {
     if (error instanceof ConversionError) {
       writeFileSync(
-        resolve(outDir, `${stem}.error.json`),
+        errorPath,
         `${JSON.stringify(
           {
             source: fixture.name,

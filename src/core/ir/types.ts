@@ -34,6 +34,7 @@ export interface FlashGradientFill {
   kind: "linear-gradient" | "radial-gradient";
   matrix: FlashMatrix;
   stops: FlashGradientStop[];
+  focalPoint?: number;
 }
 
 export type FlashFill = FlashSolidFill | FlashGradientFill;
