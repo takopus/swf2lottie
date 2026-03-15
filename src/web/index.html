@@ -3,14 +3,13 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>swf2lottie preview</title>
+    <title>swf2lottie client preview</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <main class="page">
-      <section class="panel">
-        <h1>swf2lottie preview</h1>
-        <div class="controls">
+    <main class="app-shell">
+      <section class="topbar">
+        <div class="topbar-controls">
           <label class="file-button">
             <input id="file-input" type="file" accept=".swf,application/x-shockwave-flash" />
             <span>Choose SWF file</span>
@@ -18,12 +17,77 @@
           <button id="convert-button" type="button" disabled>Convert</button>
         </div>
         <p id="status" class="status">No file selected.</p>
-        <p id="saved-output" class="saved-output" hidden></p>
       </section>
-      <section class="preview-panel">
-        <div id="preview" class="preview" aria-label="Lottie preview"></div>
+
+      <section id="workspace" class="workspace" hidden>
+        <div class="preview-column">
+          <div id="preview-frame" class="preview-frame">
+            <div id="preview-stage" class="preview-stage">
+              <div id="preview" class="preview-surface" aria-label="Lottie preview"></div>
+            </div>
+            <div class="preview-toolbar">
+              <div class="toolbar-left">
+                <span id="frame-readout" class="frame-readout">Frame 0</span>
+                <div class="toolbar-buttons">
+                  <button id="first-frame" type="button" aria-label="Go to start">|&lt;</button>
+                  <button id="prev-frame" type="button" aria-label="Previous frame">&lt;</button>
+                  <button id="toolbar-play" type="button" aria-label="Toggle playback">Play</button>
+                  <button id="next-frame" type="button" aria-label="Next frame">&gt;</button>
+                </div>
+              </div>
+              <div class="toolbar-buttons">
+                <button id="zoom-out" type="button" aria-label="Zoom out">Zoom out</button>
+                <button id="zoom-reset" type="button" aria-label="Reset zoom">100%</button>
+                <button id="zoom-in" type="button" aria-label="Zoom in">Zoom in</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <aside class="properties-panel">
+          <section class="properties-card">
+            <h2>Result</h2>
+            <p id="summary" class="summary">No converted file selected.</p>
+            <div class="summary-actions">
+              <span id="issue-counts" class="issue-counts">0 warnings, 0 errors</span>
+              <button id="toggle-output" type="button">Show output</button>
+            </div>
+          </section>
+
+          <section class="properties-card">
+            <h2>Properties</h2>
+            <label class="field">
+              <span>fps</span>
+              <input id="fps-input" type="number" min="1" step="0.01" />
+            </label>
+            <label class="field">
+              <span>width</span>
+              <input id="width-input" type="number" min="1" step="1" />
+            </label>
+            <label class="field">
+              <span>height</span>
+              <input id="height-input" type="number" min="1" step="1" />
+            </label>
+            <div class="property-actions">
+              <button id="update-preview" type="button" disabled>Update preview</button>
+              <button id="save-json" type="button" disabled>Save JSON</button>
+            </div>
+            <p id="saved-output" class="saved-output" hidden></p>
+          </section>
+        </aside>
       </section>
-      <pre id="issues" class="issues" hidden></pre>
+
+      <section id="output-panel" class="output-panel" hidden>
+        <pre id="output-json" class="output-json"></pre>
+      </section>
+
+      <section class="recent-panel">
+        <div class="recent-header">
+          <h2>Recent saves</h2>
+          <p>Up to 9 most recent saved animations in this session.</p>
+        </div>
+        <div id="recent-grid" class="recent-grid"></div>
+      </section>
     </main>
 
     <script src="/vendor/lottie.min.js"></script>

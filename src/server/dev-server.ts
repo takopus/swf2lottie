@@ -35,6 +35,11 @@ createServer(async (request, response) => {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/save-json") {
+      await handleSaveJsonRequest(request, response, url);
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/fixtures") {
       sendJson(response, 200, {
         fixtures: listExportedFixtures()
@@ -154,6 +159,58 @@ async function handleConvertRequest(
   }
 }
 
+async function handleSaveJsonRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  url: URL
+): Promise<void> {
+  const filename = sanitizeJsonFilename(url.searchParams.get("filename") ?? "converted.json");
+  const stem = basename(filename, extname(filename));
+  const jsonPath = resolve(outDir, filename);
+  const metaPath = resolve(outDir, `${stem}.meta.json`);
+
+  const buffer = await readRequestBody(request);
+  const text = buffer.toString("utf8");
+
+  let animation: unknown;
+  try {
+    animation = JSON.parse(text);
+  } catch {
+    sendJson(response, 400, {
+      ok: false,
+      message: "Invalid JSON payload."
+    });
+    return;
+  }
+
+  const issuesHeader = url.searchParams.get("issues");
+  const sourceHeader = url.searchParams.get("source") ?? filename.replace(/\.json$/i, ".swf");
+  const issues = parseIssuesQuery(issuesHeader);
+
+  writeFileSync(jsonPath, `${JSON.stringify(animation, null, 2)}\n`, "utf8");
+  writeFileSync(
+    metaPath,
+    `${JSON.stringify(
+      {
+        source: sourceHeader,
+        issues
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  );
+
+  sendJson(response, 200, {
+    ok: true,
+    output: {
+      json: `out/manual/${filename}`,
+      meta: `out/manual/${stem}.meta.json`
+    },
+    size: statSync(jsonPath).size
+  });
+}
+
 function readRequestBody(request: IncomingMessage): Promise<Buffer> {
   return new Promise((resolvePromise, reject) => {
     const chunks: Buffer[] = [];
@@ -171,6 +228,11 @@ function readRequestBody(request: IncomingMessage): Promise<Buffer> {
 function sanitizeFilename(filename: string): string {
   const cleaned = filename.replace(/[^A-Za-z0-9._-]/g, "_");
   return cleaned.toLowerCase().endsWith(".swf") ? cleaned : `${cleaned}.swf`;
+}
+
+function sanitizeJsonFilename(filename: string): string {
+  const cleaned = filename.replace(/[^A-Za-z0-9._-]/g, "_");
+  return cleaned.toLowerCase().endsWith(".json") ? cleaned : `${cleaned}.json`;
 }
 
 function sanitizeFixtureJsonName(filename: string): string | null {
@@ -198,6 +260,19 @@ function sanitizeFixtureJsonName(filename: string): string | null {
 function sendJson(response: ServerResponse, statusCode: number, payload: unknown): void {
   response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
   response.end(`${JSON.stringify(payload, null, 2)}\n`);
+}
+
+function parseIssuesQuery(serialized: string | null): unknown[] {
+  if (!serialized) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(serialized);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
 }
 
 function listExportedFixtures(): Array<{ name: string; size: number; href: string }> {

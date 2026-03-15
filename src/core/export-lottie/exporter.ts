@@ -51,6 +51,13 @@ interface VectorKeySample {
   value: number[];
 }
 
+interface ShapeStyleGroup {
+  index: number;
+  fill?: FlashShapePath["fill"];
+  stroke?: FlashShapePath["stroke"];
+  paths: FlashShapePath[];
+}
+
 type FlashSymbolMap = Map<string, FlashDocument["symbols"][number]>;
 
 export function exportToLottie(document: FlashDocument): {
@@ -190,9 +197,7 @@ function exportTrack(
 
   if (symbol.kind === "shape") {
     const sourceSamples = shouldBakeLayerTransform ? track.samples : undefined;
-    const shapes = sortShapeGroups(
-      symbol.paths.flatMap((path) => exportShapePath(path, issues, transformSamples, sourceSamples))
-    );
+    const shapes = sortShapeGroups(exportShapePaths(symbol.paths, issues, transformSamples, sourceSamples));
     if (shapes.length === 0) {
       return [];
     }
@@ -348,54 +353,80 @@ function exportTransformSamples(samples: TransformSample[]): Record<string, unkn
   };
 }
 
-function exportShapePath(
-  path: FlashShapePath,
+function exportShapePaths(
+  paths: FlashShapePath[],
   issues: ConversionIssue[],
   transformSamples: TransformSample[] = [],
   sourceSamples?: Array<FlashDisplayObjectState | null>
 ): Record<string, unknown>[] {
-  const shapePath = sourceSamples && needsBakedMatrix(sourceSamples)
-    ? bakePathAnimation(path, sourceSamples)
-    : exportLottieBezier(path);
+  const exported: Record<string, unknown>[] = [];
 
-  const items: Record<string, unknown>[] = [shapePath];
+  for (const group of groupPathsByStyle(paths)) {
+    const items: Record<string, unknown>[] = group.paths.map((path) =>
+      sourceSamples && needsBakedMatrix(sourceSamples)
+        ? bakePathAnimation(path, sourceSamples)
+        : exportLottieBezier(path)
+    );
 
-  if (path.fill) {
-    if (path.fill.kind === "solid") {
-      items.push(exportSolidFill(path.fill, transformSamples));
-    } else if (path.fill.kind === "linear-gradient") {
-      items.push(exportLinearGradientFill(path.fill, transformSamples, sourceSamples));
-    } else if (path.fill.kind === "radial-gradient") {
-      items.push(exportRadialGradientFill(path.fill, transformSamples, sourceSamples));
-    } else {
-      issues.push({
-        code: "not_implemented",
-        severity: "warning",
-        message: "This gradient fill type is parsed but not exported yet.",
-        details: { fillKind: path.fill.kind }
-      });
+    if (group.fill) {
+      if (group.fill.kind === "solid") {
+        items.push(exportSolidFill(group.fill, transformSamples));
+      } else if (group.fill.kind === "linear-gradient") {
+        items.push(exportLinearGradientFill(group.fill, transformSamples, sourceSamples));
+      } else if (group.fill.kind === "radial-gradient") {
+        items.push(exportRadialGradientFill(group.fill, transformSamples, sourceSamples));
+      } else {
+        issues.push({
+          code: "not_implemented",
+          severity: "warning",
+          message: "This gradient fill type is parsed but not exported yet.",
+          details: { fillKind: group.fill.kind }
+        });
+      }
     }
-  }
 
-  if (path.stroke?.kind === "solid") {
-    items.push(exportSolidStroke(path.stroke));
-  }
+    if (group.stroke?.kind === "solid") {
+      items.push(exportSolidStroke(group.stroke));
+    }
 
-  if (items.length === 1) {
-    issues.push({
-      code: "unsupported_fill",
-      severity: "warning",
-      message: "Paths without supported fill or stroke are skipped."
-    });
-    return [];
-  }
+    if (items.length === group.paths.length) {
+      issues.push({
+        code: "unsupported_fill",
+        severity: "warning",
+        message: "Paths without supported fill or stroke are skipped."
+      });
+      continue;
+    }
 
-  return [
-    {
+    exported.push({
       ty: "gr",
       it: [...items, exportGroupTransform()]
+    });
+  }
+
+  return exported;
+}
+
+function groupPathsByStyle(paths: FlashShapePath[]): ShapeStyleGroup[] {
+  const groups = new Map<string, ShapeStyleGroup>();
+
+  for (const [index, path] of paths.entries()) {
+    const groupKey = `${path.fill ? JSON.stringify(path.fill) : "none"}|${path.stroke ? JSON.stringify(path.stroke) : "none"}`;
+    const existing = groups.get(groupKey);
+    if (existing) {
+      existing.paths.push(path);
+      continue;
     }
-  ];
+
+    groups.set(groupKey, {
+      index,
+      fill: path.fill,
+      stroke: path.stroke,
+      paths: [path]
+    });
+  }
+
+  return [...groups.values()].sort((left, right) => left.index - right.index);
 }
 
 function exportMaskProperties(
@@ -477,7 +508,7 @@ function exportStaticInstanceShapes(
   }
 
   if (symbol.kind === "shape") {
-    const items = symbol.paths.flatMap((path) => exportShapePath(path, issues, transformSamples));
+    const items = exportShapePaths(symbol.paths, issues, transformSamples);
     if (items.length === 0) {
       return [];
     }
@@ -565,7 +596,7 @@ function exportMovieClipAsFlattenedLayers(
       }
 
       const bakedShapes = sortShapeGroups(
-        leaf.symbol.paths.flatMap((path) => exportShapePath(path, issues, transformSamples, leaf.samples))
+        exportShapePaths(leaf.symbol.paths, issues, transformSamples, leaf.samples)
       );
       if (bakedShapes.length === 0) {
         return [];
