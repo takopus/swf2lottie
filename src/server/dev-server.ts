@@ -4,6 +4,7 @@ import { basename, extname, resolve } from "node:path";
 
 import { convertSwfToLottie } from "../core/convert.js";
 import { ConversionError } from "../core/issues.js";
+import type { ExportedBitmapAsset } from "../core/export-lottie/types.js";
 
 const host = "127.0.0.1";
 const port = Number.parseInt(process.env.PORT ?? "4173", 10);
@@ -129,6 +130,7 @@ async function handleConvertRequest(
     sendJson(response, 200, {
       ok: true,
       animation: result.animation,
+      bitmapAssets: result.bitmapAssets,
       issues: result.issues,
       output: {
         json: `out/manual/${stem}.json`,
@@ -172,9 +174,9 @@ async function handleSaveJsonRequest(
   const buffer = await readRequestBody(request);
   const text = buffer.toString("utf8");
 
-  let animation: unknown;
+  let payload: unknown;
   try {
-    animation = JSON.parse(text);
+    payload = JSON.parse(text);
   } catch {
     sendJson(response, 400, {
       ok: false,
@@ -183,11 +185,18 @@ async function handleSaveJsonRequest(
     return;
   }
 
+  const packagePayload = normalizeSavePayload(payload);
+  const animation = packagePayload.animation;
+  const externalAssets = packagePayload.externalAssets;
+
   const issuesHeader = url.searchParams.get("issues");
   const sourceHeader = url.searchParams.get("source") ?? filename.replace(/\.json$/i, ".swf");
   const issues = parseIssuesQuery(issuesHeader);
 
   writeFileSync(jsonPath, `${JSON.stringify(animation, null, 2)}\n`, "utf8");
+  for (const asset of externalAssets) {
+    writeFileSync(resolve(outDir, asset.filename), Buffer.from(asset.dataBase64, "base64"));
+  }
   writeFileSync(
     metaPath,
     `${JSON.stringify(
@@ -205,7 +214,8 @@ async function handleSaveJsonRequest(
     ok: true,
     output: {
       json: `out/manual/${filename}`,
-      meta: `out/manual/${stem}.meta.json`
+      meta: `out/manual/${stem}.meta.json`,
+      assets: externalAssets.map((asset) => `out/manual/${asset.filename}`)
     },
     size: statSync(jsonPath).size
   });
@@ -273,6 +283,44 @@ function parseIssuesQuery(serialized: string | null): unknown[] {
   } catch {
     return [];
   }
+}
+
+function normalizeSavePayload(payload: unknown): {
+  animation: unknown;
+  externalAssets: ExportedBitmapAsset[];
+} {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return {
+      animation: payload,
+      externalAssets: []
+    };
+  }
+
+  const candidate = payload as {
+    animation?: unknown;
+    externalAssets?: unknown;
+  };
+  const externalAssets = Array.isArray(candidate.externalAssets)
+    ? candidate.externalAssets.filter(isExportedBitmapAsset)
+    : [];
+
+  return {
+    animation: Object.prototype.hasOwnProperty.call(candidate, "animation") ? candidate.animation : payload,
+    externalAssets
+  };
+}
+
+function isExportedBitmapAsset(value: unknown): value is ExportedBitmapAsset {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const candidate = value as Partial<ExportedBitmapAsset>;
+  return typeof candidate.filename === "string" &&
+    typeof candidate.dataBase64 === "string" &&
+    typeof candidate.mimeType === "string" &&
+    typeof candidate.assetId === "string" &&
+    typeof candidate.symbolId === "string";
 }
 
 function listExportedFixtures(): Array<{ name: string; size: number; href: string }> {

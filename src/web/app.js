@@ -17,6 +17,7 @@ const issueCounts = document.getElementById("issue-counts");
 const toggleOutput = document.getElementById("toggle-output");
 const outputPanel = document.getElementById("output-panel");
 const outputJson = document.getElementById("output-json");
+const bitmapStorageInput = document.getElementById("bitmap-storage");
 const fpsInput = document.getElementById("fps-input");
 const widthInput = document.getElementById("width-input");
 const heightInput = document.getElementById("height-input");
@@ -33,6 +34,7 @@ let currentAnimationInstance = null;
 let currentSourceName = null;
 let currentBaseAnimation = null;
 let currentWorkingAnimation = null;
+let currentBitmapAssets = [];
 let currentIssues = [];
 let currentZoom = 1;
 let currentFrame = 0;
@@ -84,6 +86,7 @@ async function convertSelectedFile() {
     currentIssues = payload.issues ?? [];
     currentBaseAnimation = structuredClone(payload.animation);
     currentWorkingAnimation = structuredClone(payload.animation);
+    currentBitmapAssets = Array.isArray(payload.bitmapAssets) ? structuredClone(payload.bitmapAssets) : [];
     renderWorkspace();
     status.textContent = `Converted ${selectedFile.name}.`;
   } catch (error) {
@@ -118,6 +121,7 @@ function clearWorkspace() {
   currentSourceName = null;
   currentBaseAnimation = null;
   currentWorkingAnimation = null;
+  currentBitmapAssets = [];
   currentIssues = [];
   currentZoom = 1;
   currentFrame = 0;
@@ -127,6 +131,7 @@ function clearWorkspace() {
   outputJson.textContent = "";
   toggleOutput.hidden = true;
   toggleOutput.textContent = "Show output";
+  bitmapStorageInput.value = "inline";
   fpsInput.value = "";
   widthInput.value = "";
   heightInput.value = "";
@@ -343,11 +348,20 @@ async function saveCurrentAnimation() {
   }
 
   const filename = toJsonFilename(currentSourceName ?? `saved-${Date.now()}.json`);
-  const payloadText = JSON.stringify(currentWorkingAnimation, null, 2);
+  const bitmapStorageMode = currentBitmapAssets.length > 0 ? bitmapStorageInput.value : "inline";
+  const savePackage = bitmapStorageMode === "external"
+    ? createExternalBitmapSavePackage(currentWorkingAnimation, currentBitmapAssets, filename)
+    : {
+        animation: structuredClone(currentWorkingAnimation),
+        externalAssets: []
+      };
+  const payloadText = JSON.stringify(savePackage.animation, null, 2);
 
   let saveResult;
   try {
-    saveResult = await saveJsonToUserFile(filename, payloadText);
+    saveResult = savePackage.externalAssets.length > 0
+      ? await saveExternalPackageToUserFiles(filename, payloadText, savePackage.externalAssets)
+      : await saveJsonToUserFile(filename, payloadText);
   } catch (error) {
     saveResult = {
       confirmed: false,
@@ -361,9 +375,9 @@ async function saveCurrentAnimation() {
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     name: savedFilename,
     source: currentSourceName ?? savedFilename,
-    animation: structuredClone(currentWorkingAnimation),
+    animation: structuredClone(savePackage.animation),
     issues: structuredClone(currentIssues),
-    size: byteSizeOfJson(currentWorkingAnimation)
+    size: byteSizeOfJson(savePackage.animation)
   };
 
   recentEntries.unshift(record);
@@ -385,7 +399,10 @@ async function saveCurrentAnimation() {
         headers: {
           "content-type": "application/json"
         },
-        body: payloadText
+        body: JSON.stringify({
+          animation: savePackage.animation,
+          externalAssets: savePackage.externalAssets
+        })
       }
     );
 
@@ -499,6 +516,93 @@ async function saveJsonToUserFile(filename, payloadText) {
   link.remove();
   URL.revokeObjectURL(url);
   return { confirmed: false, filename };
+}
+
+async function saveExternalPackageToUserFiles(filename, payloadText, externalAssets) {
+  if ("showDirectoryPicker" in window) {
+    const directoryHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+    await writeTextFileToDirectory(directoryHandle, filename, payloadText);
+    for (const asset of externalAssets) {
+      await writeBinaryFileToDirectory(directoryHandle, asset.filename, base64ToBytes(asset.dataBase64));
+    }
+    return { confirmed: true, filename };
+  }
+
+  triggerFileDownload(filename, new Blob([payloadText], { type: "application/json;charset=utf-8" }));
+  for (const asset of externalAssets) {
+    triggerFileDownload(asset.filename, new Blob([base64ToBytes(asset.dataBase64)], { type: asset.mimeType }));
+  }
+  return { confirmed: false, filename };
+}
+
+function createExternalBitmapSavePackage(animation, bitmapAssets, filename) {
+  const clonedAnimation = structuredClone(animation);
+  const stem = filename.replace(/\.json$/i, "").replace(/[^A-Za-z0-9._-]/g, "_");
+  const externalAssets = bitmapAssets.map((asset) => ({
+    ...asset,
+    filename: `${stem}__${asset.filename}`
+  }));
+  const assetMap = new Map(externalAssets.map((asset) => [asset.assetId, asset]));
+
+  if (Array.isArray(clonedAnimation.assets)) {
+    clonedAnimation.assets = clonedAnimation.assets.map((asset) => {
+      if (!asset || typeof asset !== "object") {
+        return asset;
+      }
+
+      const matchedAsset = assetMap.get(asset.id);
+      if (!matchedAsset) {
+        return asset;
+      }
+
+      return {
+        id: matchedAsset.assetId,
+        w: matchedAsset.width,
+        h: matchedAsset.height,
+        u: "",
+        p: matchedAsset.filename
+      };
+    });
+  }
+
+  return {
+    animation: clonedAnimation,
+    externalAssets
+  };
+}
+
+async function writeTextFileToDirectory(directoryHandle, filename, text) {
+  const fileHandle = await directoryHandle.getFileHandle(filename, { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(text);
+  await writable.close();
+}
+
+async function writeBinaryFileToDirectory(directoryHandle, filename, bytes) {
+  const fileHandle = await directoryHandle.getFileHandle(filename, { create: true });
+  const writable = await fileHandle.createWritable();
+  await writable.write(bytes);
+  await writable.close();
+}
+
+function triggerFileDownload(filename, blob) {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+function base64ToBytes(base64) {
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
 }
 
 function byteSizeOfJson(value) {

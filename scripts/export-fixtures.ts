@@ -8,6 +8,7 @@ import { loadSwfFixtures } from "../src/testing/fixtures.js";
 const fixturesDir = resolve(process.cwd(), "fixtures");
 const outDir = resolve(process.cwd(), "out");
 const requestedFixture = process.argv[2];
+const bitmapAssetMode = process.env.BITMAP_ASSET_MODE === "external" ? "external" : "inline";
 
 if (!requestedFixture) {
   rmSync(outDir, { recursive: true, force: true });
@@ -37,7 +38,7 @@ for (const fixture of fixtures) {
   rmSync(errorPath, { force: true });
 
   try {
-    const result = convertSwfToLottie(fixture.buffer);
+    const result = convertSwfToLottie(fixture.buffer, { bitmapAssetMode });
     if (!result.animation) {
       writeFileSync(
         errorPath,
@@ -73,6 +74,13 @@ for (const fixture of fixtures) {
       )}\n`,
       "utf8"
     );
+    for (const asset of result.bitmapAssets) {
+      if (bitmapAssetMode !== "external") {
+        continue;
+      }
+
+      writeFileSync(resolve(outDir, asset.filename), Buffer.from(asset.dataBase64, "base64"));
+    }
     process.stdout.write(`ok ${fixture.name}\n`);
   } catch (error) {
     if (error instanceof ConversionError) {

@@ -13,7 +13,12 @@ import type {
   FlashTimeline
 } from "../ir/index.js";
 import type { ConversionIssue } from "../issues.js";
-import type { LottieExportResult } from "./types.js";
+import type {
+  BitmapAssetMode,
+  ExportedBitmapAsset,
+  LottieExportOptions,
+  LottieExportResult
+} from "./types.js";
 
 interface TimelineTrack {
   id: string;
@@ -84,19 +89,22 @@ interface PixelMatrix2d {
 
 type FlashSymbolMap = Map<string, FlashDocument["symbols"][number]>;
 
-export function exportToLottie(document: FlashDocument): {
+export function exportToLottie(document: FlashDocument, options: LottieExportOptions = {}): {
   result: LottieExportResult;
   issues: ConversionIssue[];
 } {
   const issues: ConversionIssue[] = [];
   const symbolMap: FlashSymbolMap = new Map(document.symbols.map((symbol) => [symbol.id, symbol]));
   const bitmapAssets: Record<string, unknown>[] = [];
+  const exportedBitmapAssets: ExportedBitmapAsset[] = [];
   const bitmapAssetIds = new Map<string, string>();
+  const bitmapAssetMode = options.bitmapAssetMode ?? "inline";
+  const bitmapAssetBasePath = normalizeBitmapAssetBasePath(options.bitmapAssetBasePath ?? "");
   const root = symbolMap.get(document.rootTimelineId);
 
   if (!root || root.kind !== "movieclip") {
     return {
-      result: { animation: null },
+      result: { animation: null, bitmapAssets: [] },
       issues: [
         {
           code: "unsupported_feature",
@@ -107,7 +115,17 @@ export function exportToLottie(document: FlashDocument): {
     };
   }
 
-  const layers = exportTimelineLayers(root.timeline, document, symbolMap, bitmapAssets, bitmapAssetIds, issues);
+  const layers = exportTimelineLayers(
+    root.timeline,
+    document,
+    symbolMap,
+    bitmapAssets,
+    exportedBitmapAssets,
+    bitmapAssetIds,
+    issues,
+    bitmapAssetMode,
+    bitmapAssetBasePath
+  );
 
   if (layers.length === 0) {
     issues.push({
@@ -133,7 +151,8 @@ export function exportToLottie(document: FlashDocument): {
             assets: bitmapAssets,
             layers
           }
-        : null
+        : null,
+      bitmapAssets: exportedBitmapAssets
     },
     issues
   };
@@ -144,8 +163,11 @@ function exportMovieClipAsset(
   document: FlashDocument,
   symbolMap: FlashSymbolMap,
   bitmapAssets: Record<string, unknown>[],
+  exportedBitmapAssets: ExportedBitmapAsset[],
   bitmapAssetIds: Map<string, string>,
-  issues: ConversionIssue[]
+  issues: ConversionIssue[],
+  bitmapAssetMode: BitmapAssetMode,
+  bitmapAssetBasePath: string
 ): Record<string, unknown> {
   return {
     id: `asset:${symbol.id}`,
@@ -153,7 +175,17 @@ function exportMovieClipAsset(
     fr: document.frameRate,
     w: document.width,
     h: document.height,
-    layers: exportTimelineLayers(symbol.timeline, document, symbolMap, bitmapAssets, bitmapAssetIds, issues)
+    layers: exportTimelineLayers(
+      symbol.timeline,
+      document,
+      symbolMap,
+      bitmapAssets,
+      exportedBitmapAssets,
+      bitmapAssetIds,
+      issues,
+      bitmapAssetMode,
+      bitmapAssetBasePath
+    )
   };
 }
 
@@ -162,15 +194,30 @@ function exportTimelineLayers(
   document: FlashDocument,
   symbolMap: FlashSymbolMap,
   bitmapAssets: Record<string, unknown>[],
+  exportedBitmapAssets: ExportedBitmapAsset[],
   bitmapAssetIds: Map<string, string>,
-  issues: ConversionIssue[]
+  issues: ConversionIssue[],
+  bitmapAssetMode: BitmapAssetMode,
+  bitmapAssetBasePath: string
 ): Record<string, unknown>[] {
   const tracks = buildTimelineTracks(timeline);
   const trackMap = new Map(tracks.map((track) => [track.id, track]));
 
   const layers = tracks
     .sort((left, right) => right.depth - left.depth)
-    .flatMap((track) => exportTrack(track, trackMap, timeline, document, symbolMap, bitmapAssets, bitmapAssetIds, issues));
+    .flatMap((track) => exportTrack(
+      track,
+      trackMap,
+      timeline,
+      document,
+      symbolMap,
+      bitmapAssets,
+      exportedBitmapAssets,
+      bitmapAssetIds,
+      issues,
+      bitmapAssetMode,
+      bitmapAssetBasePath
+    ));
 
   return layers.map((layer, index) => ({
     ...layer,
@@ -185,8 +232,11 @@ function exportTrack(
   document: FlashDocument,
   symbolMap: FlashSymbolMap,
   bitmapAssets: Record<string, unknown>[],
+  exportedBitmapAssets: ExportedBitmapAsset[],
   bitmapAssetIds: Map<string, string>,
-  issues: ConversionIssue[]
+  issues: ConversionIssue[],
+  bitmapAssetMode: BitmapAssetMode,
+  bitmapAssetBasePath: string
 ): Record<string, unknown>[] {
   if (track.samples.some((sample) => sample?.isMask)) {
     return [];
@@ -238,9 +288,12 @@ function exportTrack(
         shouldBakeLayerTransform,
         symbolMap,
         bitmapAssets,
+        exportedBitmapAssets,
         bitmapAssetIds,
         maskProperties,
-        issues
+        issues,
+        bitmapAssetMode,
+        bitmapAssetBasePath
       );
     }
 
@@ -273,7 +326,14 @@ function exportTrack(
   }
 
   if (symbol.kind === "bitmap") {
-    const assetId = ensureBitmapAsset(symbol, bitmapAssets, bitmapAssetIds);
+    const assetId = ensureBitmapAsset(
+      symbol,
+      bitmapAssets,
+      exportedBitmapAssets,
+      bitmapAssetIds,
+      bitmapAssetMode,
+      bitmapAssetBasePath
+    );
     const hasUnsupportedColor = transformSamples.some((sample) =>
       sample.colorTransform.tint !== undefined || sample.colorTransform.brightness !== undefined
     );
@@ -340,16 +400,19 @@ function exportTrack(
   }
 
   if (canFlattenStaticMovieClip(symbol, symbolMap)) {
-    return exportStaticMovieClipLayers(
-      track,
-      symbol,
-      timeline,
-      document,
-      symbolMap,
-      bitmapAssets,
-      bitmapAssetIds,
-      issues
-    );
+      return exportStaticMovieClipLayers(
+        track,
+        symbol,
+        timeline,
+        document,
+        symbolMap,
+        bitmapAssets,
+        exportedBitmapAssets,
+        bitmapAssetIds,
+        issues,
+        bitmapAssetMode,
+        bitmapAssetBasePath
+      );
   }
 
   return exportMovieClipAsFlattenedLayers(track, symbol, timeline.frames.length, symbolMap, issues).map(
@@ -510,9 +573,12 @@ function exportShapeTrackWithBitmapFills(
   shouldBakeLayerTransform: boolean,
   symbolMap: FlashSymbolMap,
   bitmapAssets: Record<string, unknown>[],
+  exportedBitmapAssets: ExportedBitmapAsset[],
   bitmapAssetIds: Map<string, string>,
   maskProperties: Record<string, unknown>[],
-  issues: ConversionIssue[]
+  issues: ConversionIssue[],
+  bitmapAssetMode: BitmapAssetMode,
+  bitmapAssetBasePath: string
 ): Record<string, unknown>[] {
   const groups = groupPathsByStyle(symbol.paths);
   const layerSpecs: LayerExportSpec[] = [];
@@ -656,7 +722,14 @@ function exportShapeTrackWithBitmapFills(
         });
       }
 
-      const assetId = ensureBitmapAsset(spec.bitmapSymbol, bitmapAssets, bitmapAssetIds);
+      const assetId = ensureBitmapAsset(
+        spec.bitmapSymbol,
+        bitmapAssets,
+        exportedBitmapAssets,
+        bitmapAssetIds,
+        bitmapAssetMode,
+        bitmapAssetBasePath
+      );
       layers.push({
         ...baseLayer,
         nm: spec.name,
@@ -797,8 +870,11 @@ function exportStaticMovieClipLayers(
   document: FlashDocument,
   symbolMap: FlashSymbolMap,
   bitmapAssets: Record<string, unknown>[],
+  exportedBitmapAssets: ExportedBitmapAsset[],
   bitmapAssetIds: Map<string, string>,
-  issues: ConversionIssue[]
+  issues: ConversionIssue[],
+  bitmapAssetMode: BitmapAssetMode,
+  bitmapAssetBasePath: string
 ): Record<string, unknown>[] {
   const frame = symbol.timeline.frames[0];
   if (!frame) {
@@ -839,8 +915,11 @@ function exportStaticMovieClipLayers(
         document,
         symbolMap,
         bitmapAssets,
+        exportedBitmapAssets,
         bitmapAssetIds,
-        issues
+        issues,
+        bitmapAssetMode,
+        bitmapAssetBasePath
       );
     });
 }
@@ -2598,7 +2677,10 @@ function layerSpecPriority(spec: LayerExportSpec): number {
 function ensureBitmapAsset(
   symbol: FlashBitmapSymbol,
   assets: Record<string, unknown>[],
-  assetIds: Map<string, string>
+  exportedBitmapAssets: ExportedBitmapAsset[],
+  assetIds: Map<string, string>,
+  bitmapAssetMode: BitmapAssetMode,
+  bitmapAssetBasePath: string
 ): string {
   const existing = assetIds.get(symbol.id);
   if (existing) {
@@ -2606,16 +2688,64 @@ function ensureBitmapAsset(
   }
 
   const assetId = `image:${symbol.id}`;
-  assets.push({
-    id: assetId,
-    w: symbol.width,
-    h: symbol.height,
-    u: "",
-    p: `data:${symbol.mimeType};base64,${encodeBase64(symbol.data)}`,
-    e: 1
+  const dataBase64 = encodeBase64(symbol.data);
+  const filename = `bitmap-${sanitizeBitmapAssetName(symbol.id)}${extensionForMimeType(symbol.mimeType)}`;
+
+  assets.push(
+    bitmapAssetMode === "inline"
+      ? {
+          id: assetId,
+          w: symbol.width,
+          h: symbol.height,
+          u: "",
+          p: `data:${symbol.mimeType};base64,${dataBase64}`,
+          e: 1
+        }
+      : {
+          id: assetId,
+          w: symbol.width,
+          h: symbol.height,
+          u: bitmapAssetBasePath,
+          p: filename
+        }
+  );
+  exportedBitmapAssets.push({
+    symbolId: symbol.id,
+    assetId,
+    filename,
+    mimeType: symbol.mimeType,
+    dataBase64,
+    width: symbol.width,
+    height: symbol.height
   });
   assetIds.set(symbol.id, assetId);
   return assetId;
+}
+
+function normalizeBitmapAssetBasePath(value: string): string {
+  if (!value) {
+    return "";
+  }
+
+  const normalized = value.replace(/\\/g, "/");
+  return normalized.endsWith("/") ? normalized : `${normalized}/`;
+}
+
+function sanitizeBitmapAssetName(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, "_");
+}
+
+function extensionForMimeType(mimeType: FlashBitmapSymbol["mimeType"]): string {
+  switch (mimeType) {
+    case "image/jpeg":
+      return ".jpg";
+    case "image/png":
+      return ".png";
+    case "image/gif":
+      return ".gif";
+    default:
+      return ".bin";
+  }
 }
 
 function encodeBase64(bytes: Uint8Array): string {

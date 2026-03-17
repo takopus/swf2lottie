@@ -252,6 +252,42 @@ describe("Lottie export", () => {
     expect(imageLayer).toBeDefined();
     expect(imageLayer?.ks?.p?.a).toBe(1);
   });
+
+  it("keeps bitmap assets inline by default", () => {
+    const fixtures = loadSwfFixtures(resolve(process.cwd(), "fixtures"));
+    const bitmap = fixtures.find((fixture) => fixture.name === "testswf25-simple-bitmap.swf");
+
+    if (!bitmap) {
+      throw new Error("Bitmap fixture not found.");
+    }
+
+    const result = convertSwfToLottie(bitmap.buffer);
+    const animation = result.animation as {
+      assets?: Array<{ p?: string }>;
+    } | null;
+
+    expect(animation?.assets?.[0]?.p?.startsWith("data:image/")).toBe(true);
+    expect(result.bitmapAssets.length).toBeGreaterThan(0);
+  });
+
+  it("can export bitmap assets as external files", () => {
+    const fixtures = loadSwfFixtures(resolve(process.cwd(), "fixtures"));
+    const bitmap = fixtures.find((fixture) => fixture.name === "testswf25-simple-bitmap.swf");
+
+    if (!bitmap) {
+      throw new Error("Bitmap fixture not found.");
+    }
+
+    const result = convertSwfToLottie(bitmap.buffer, { bitmapAssetMode: "external" });
+    const animation = result.animation as {
+      assets?: Array<{ u?: string; p?: string; e?: number }>;
+    } | null;
+
+    expect(animation?.assets?.[0]?.p?.startsWith("bitmap-")).toBe(true);
+    expect(animation?.assets?.[0]?.u).toBe("");
+    expect(animation?.assets?.[0]?.e).toBeUndefined();
+    expect(result.bitmapAssets[0]?.dataBase64.length).toBeGreaterThan(0);
+  });
 });
 
 function findAnimatedFill(node: unknown): { c?: { a?: number } } | null {

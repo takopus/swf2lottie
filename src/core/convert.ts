@@ -1,6 +1,7 @@
 import { ConversionError } from "./issues.js";
 import type { ConversionIssue } from "./issues.js";
 import { exportToLottie } from "./export-lottie/exporter.js";
+import type { BitmapAssetMode, ExportedBitmapAsset } from "./export-lottie/types.js";
 import { optimizeLottieAnimation } from "./optimize-lottie.js";
 import { parseSwf } from "./swf/parser.js";
 import { validateDocumentSubset } from "./validate/subset.js";
@@ -9,10 +10,13 @@ const ENABLE_SAFE_LOTTIE_OPTIMIZATION = false;
 
 export interface ConvertSwfOptions {
   failOnWarnings?: boolean;
+  bitmapAssetMode?: BitmapAssetMode;
+  bitmapAssetBasePath?: string;
 }
 
 export interface ConvertSwfResult {
   animation: Record<string, unknown> | null;
+  bitmapAssets: ExportedBitmapAsset[];
   issues: ConversionIssue[];
 }
 
@@ -29,7 +33,10 @@ export function convertSwfToLottie(
 
   issues.push(...validateDocumentSubset(parsed.document));
 
-  const exportResult = exportToLottie(parsed.document);
+  const exportResult = exportToLottie(parsed.document, {
+    ...(options.bitmapAssetMode ? { bitmapAssetMode: options.bitmapAssetMode } : {}),
+    ...(options.bitmapAssetBasePath ? { bitmapAssetBasePath: options.bitmapAssetBasePath } : {})
+  });
   issues.push(...exportResult.issues);
 
   const hasErrors = issues.some((issue) => issue.severity === "error");
@@ -45,6 +52,7 @@ export function convertSwfToLottie(
           ? optimizeLottieAnimation(exportResult.result.animation)
           : exportResult.result.animation)
       : null,
+    bitmapAssets: exportResult.result.bitmapAssets,
     issues
   };
 }

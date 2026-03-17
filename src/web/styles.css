@@ -211,7 +211,7 @@ button:disabled {
 
 .properties-fields {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -261,6 +261,14 @@ button:disabled {
 }
 
 .field input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  background: white;
+}
+
+.field select {
   width: 100%;
   padding: 10px 12px;
   border: 2px solid var(--border);
