@@ -50,6 +50,21 @@ export interface SwfDefineMorphShapeTag {
   paths: import("../ir/index.js").FlashMorphShapePath[];
 }
 
+export interface SwfDefineBitmapTag {
+  code: 6 | 21 | 35 | 36;
+  characterId: number;
+  mimeType: "image/jpeg" | "image/png" | "image/gif";
+  data: Uint8Array;
+  width: number;
+  height: number;
+  hasSeparateAlpha?: boolean;
+}
+
+export interface SwfJpegTablesTag {
+  code: 8;
+  data: Uint8Array;
+}
+
 export interface SwfDefineSpriteTag {
   code: 39;
   spriteId: number;
@@ -74,6 +89,8 @@ export type SwfControlTag =
   | SwfRemoveObject2Tag
   | SwfDefineShapeTag
   | SwfDefineMorphShapeTag
+  | SwfDefineBitmapTag
+  | SwfJpegTablesTag
   | SwfDefineSpriteTag
   | SwfFileAttributesTag
   | SwfBackgroundColorTag

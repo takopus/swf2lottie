@@ -58,4 +58,26 @@ describe("convertSwfToLottie", () => {
 
     expect(result.animation).not.toBeNull();
   });
+
+  it("exports the simple bitmap fixture to a non-null animation", () => {
+    const fixtures = loadSwfFixtures(resolve(process.cwd(), "fixtures"));
+    const bitmap = fixtures.find((fixture) => fixture.name === "testswf25-simple-bitmap.swf");
+
+    expect(bitmap).toBeDefined();
+
+    const result = convertSwfToLottie((bitmap as NonNullable<typeof bitmap>).buffer);
+
+    expect(result.animation).not.toBeNull();
+  });
+
+  it("exports the bitmap motion tween fixture to a non-null animation", () => {
+    const fixtures = loadSwfFixtures(resolve(process.cwd(), "fixtures"));
+    const bitmap = fixtures.find((fixture) => fixture.name === "testswf26-bitmap-motion-tween.swf");
+
+    expect(bitmap).toBeDefined();
+
+    const result = convertSwfToLottie((bitmap as NonNullable<typeof bitmap>).buffer);
+
+    expect(result.animation).not.toBeNull();
+  });
 });

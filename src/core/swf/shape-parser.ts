@@ -582,6 +582,22 @@ function readFillStyle(
     };
   }
 
+  if (fillStyleType >= 0x40 && fillStyleType <= 0x43) {
+    const bitmapCharacterId = reader.readUi16();
+    const matrix = readMatrix(buffer, reader.position);
+
+    return {
+      value: {
+        kind: "bitmap",
+        bitmapId: `symbol:${bitmapCharacterId}`,
+        matrix: matrix.value,
+        repeat: fillStyleType === 0x40 || fillStyleType === 0x42,
+        smoothed: fillStyleType === 0x40 || fillStyleType === 0x41
+      },
+      byteLength: 1 + 2 + matrix.byteLength
+    };
+  }
+
   return {
     value: {
       kind: "solid",
@@ -723,6 +739,29 @@ function readMorphFillStyle(
         ...(gradient.endFocalPoint !== undefined ? { focalPoint: gradient.endFocalPoint } : {})
       },
       byteLength: 1 + startMatrix.byteLength + endMatrix.byteLength + gradient.byteLength
+    };
+  }
+
+  if (fillStyleType >= 0x40 && fillStyleType <= 0x43) {
+    const bitmapCharacterId = reader.readUi16();
+    const startMatrix = readMatrix(buffer, reader.position);
+    const endMatrix = readMatrix(buffer, reader.position + startMatrix.byteLength);
+    return {
+      startValue: {
+        kind: "bitmap",
+        bitmapId: `symbol:${bitmapCharacterId}`,
+        matrix: startMatrix.value,
+        repeat: fillStyleType === 0x40 || fillStyleType === 0x42,
+        smoothed: fillStyleType === 0x40 || fillStyleType === 0x41
+      },
+      endValue: {
+        kind: "bitmap",
+        bitmapId: `symbol:${bitmapCharacterId}`,
+        matrix: endMatrix.value,
+        repeat: fillStyleType === 0x40 || fillStyleType === 0x42,
+        smoothed: fillStyleType === 0x40 || fillStyleType === 0x41
+      },
+      byteLength: 1 + 2 + startMatrix.byteLength + endMatrix.byteLength
     };
   }
 

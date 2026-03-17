@@ -37,7 +37,15 @@ export interface FlashGradientFill {
   focalPoint?: number;
 }
 
-export type FlashFill = FlashSolidFill | FlashGradientFill;
+export interface FlashBitmapFill {
+  kind: "bitmap";
+  bitmapId: string;
+  matrix: FlashMatrix;
+  repeat: boolean;
+  smoothed: boolean;
+}
+
+export type FlashFill = FlashSolidFill | FlashGradientFill | FlashBitmapFill;
 
 export interface FlashSolidStroke {
   kind: "solid";
@@ -83,6 +91,16 @@ export interface FlashMorphShapeSymbol {
   paths: FlashMorphShapePath[];
 }
 
+export interface FlashBitmapSymbol {
+  kind: "bitmap";
+  id: string;
+  mimeType: "image/jpeg" | "image/png" | "image/gif";
+  data: Uint8Array;
+  width: number;
+  height: number;
+  hasSeparateAlpha?: boolean;
+}
+
 export interface FlashDisplayObjectState {
   id: string;
   symbolId: string;
@@ -112,7 +130,7 @@ export interface FlashMovieClipSymbol {
   timeline: FlashTimeline;
 }
 
-export type FlashSymbol = FlashShapeSymbol | FlashMorphShapeSymbol | FlashMovieClipSymbol;
+export type FlashSymbol = FlashShapeSymbol | FlashMorphShapeSymbol | FlashBitmapSymbol | FlashMovieClipSymbol;
 
 export interface FlashDocument {
   version: number;

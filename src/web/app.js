@@ -1,5 +1,4 @@
 const fileInput = document.getElementById("file-input");
-const convertButton = document.getElementById("convert-button");
 const status = document.getElementById("status");
 const workspace = document.getElementById("workspace");
 const previewStage = document.getElementById("preview-stage");
@@ -10,6 +9,7 @@ const prevFrameButton = document.getElementById("prev-frame");
 const nextFrameButton = document.getElementById("next-frame");
 const zoomInButton = document.getElementById("zoom-in");
 const zoomOutButton = document.getElementById("zoom-out");
+const zoomFitButton = document.getElementById("zoom-fit");
 const zoomResetButton = document.getElementById("zoom-reset");
 const frameReadout = document.getElementById("frame-readout");
 const summary = document.getElementById("summary");
@@ -37,24 +37,28 @@ let currentIssues = [];
 let currentZoom = 1;
 let currentFrame = 0;
 let isPlaying = false;
-let activeRecentId = null;
 
-fileInput.addEventListener("change", () => {
-  selectedFile = fileInput.files?.[0] ?? null;
-  convertButton.disabled = !selectedFile;
-  status.textContent = selectedFile
-    ? `Ready to convert ${selectedFile.name}.`
-    : "No file selected.";
-
+window.addEventListener("pageshow", () => {
   clearWorkspace();
 });
 
-convertButton.addEventListener("click", async () => {
+fileInput.addEventListener("change", () => {
+  selectedFile = fileInput.files?.[0] ?? null;
+  clearWorkspace();
+
+  if (!selectedFile) {
+    status.textContent = "No file selected.";
+    return;
+  }
+
+  void convertSelectedFile();
+});
+
+async function convertSelectedFile() {
   if (!selectedFile) {
     return;
   }
 
-  convertButton.disabled = true;
   status.textContent = `Converting ${selectedFile.name}...`;
   savedOutput.hidden = true;
 
@@ -80,14 +84,13 @@ convertButton.addEventListener("click", async () => {
     currentIssues = payload.issues ?? [];
     currentBaseAnimation = structuredClone(payload.animation);
     currentWorkingAnimation = structuredClone(payload.animation);
-    activeRecentId = null;
     renderWorkspace();
     status.textContent = `Converted ${selectedFile.name}.`;
   } catch (error) {
     clearWorkspace();
     status.textContent = error instanceof Error ? error.message : "Conversion failed.";
   }
-});
+}
 
 toolbarPlay.addEventListener("click", togglePlayback);
 firstFrameButton.addEventListener("click", () => goToFrame(0));
@@ -95,6 +98,7 @@ prevFrameButton.addEventListener("click", () => goToFrame(Math.max(0, currentFra
 nextFrameButton.addEventListener("click", () => goToFrame(currentFrame + 1));
 zoomInButton.addEventListener("click", () => setZoom(currentZoom + 0.25));
 zoomOutButton.addEventListener("click", () => setZoom(Math.max(0.5, currentZoom - 0.25)));
+zoomFitButton.addEventListener("click", fitZoom);
 zoomResetButton.addEventListener("click", () => setZoom(1));
 
 toggleOutput.addEventListener("click", () => {
@@ -118,10 +122,10 @@ function clearWorkspace() {
   currentZoom = 1;
   currentFrame = 0;
   isPlaying = false;
-  activeRecentId = null;
   workspace.hidden = true;
   outputPanel.hidden = true;
   outputJson.textContent = "";
+  toggleOutput.hidden = true;
   toggleOutput.textContent = "Show output";
   fpsInput.value = "";
   widthInput.value = "";
@@ -133,6 +137,11 @@ function clearWorkspace() {
   summary.textContent = "No converted file selected.";
   issueCounts.textContent = "0 warnings, 0 errors";
   frameReadout.textContent = "Frame 0";
+  previewStage.style.width = "";
+  previewStage.style.height = "";
+  preview.style.width = "";
+  preview.style.height = "";
+  preview.style.transform = "";
 }
 
 function renderWorkspace() {
@@ -149,7 +158,6 @@ function renderWorkspace() {
   updatePreviewButton.disabled = true;
   saveJsonButton.disabled = false;
   savedOutput.hidden = true;
-  currentZoom = 1;
   renderSummary();
   updateStageSize();
   renderPreviewAnimation();
@@ -162,10 +170,20 @@ function renderSummary() {
 
   const warningCount = currentIssues.filter((issue) => issue.severity === "warning").length;
   const errorCount = currentIssues.filter((issue) => issue.severity === "error").length;
+  const hasIssues = warningCount + errorCount > 0;
   const sourceLabel = currentSourceName ?? "saved animation";
 
   summary.textContent = `${sourceLabel}: ${currentWorkingAnimation.op - currentWorkingAnimation.ip} frames @ ${formatNumber(currentWorkingAnimation.fr)} fps.`;
   issueCounts.textContent = `${warningCount} warnings, ${errorCount} errors`;
+  toggleOutput.hidden = !hasIssues;
+  if (!hasIssues) {
+    outputPanel.hidden = true;
+    toggleOutput.textContent = "Show output";
+    outputJson.textContent = "";
+    return;
+  }
+
+  outputJson.textContent = formatIssues(currentIssues);
 }
 
 function renderPreviewAnimation() {
@@ -183,7 +201,7 @@ function renderPreviewAnimation() {
   });
 
   currentAnimationInstance.addEventListener("DOMLoaded", () => {
-    applyZoom();
+    fitZoom();
     goToFrame(0);
     setPlayback(false);
   });
@@ -211,26 +229,13 @@ function updateStageSize() {
   if (!currentWorkingAnimation) {
     previewStage.style.width = "";
     previewStage.style.height = "";
+    preview.style.width = "";
+    preview.style.height = "";
     return;
   }
 
-  const size = computePreviewSize(currentWorkingAnimation.w, currentWorkingAnimation.h);
-  previewStage.style.width = `${size.width}px`;
-  previewStage.style.height = `${size.height}px`;
-}
-
-function computePreviewSize(width, height) {
-  if (width <= 0 || height <= 0) {
-    return { width: 500, height: 500 };
-  }
-
-  const maxHeight = 500;
-  const maxWidth = 1000;
-  const scale = Math.min(maxHeight / height, maxWidth / width, 1);
-  return {
-    width: Math.round(width * scale),
-    height: Math.round(height * scale)
-  };
+  preview.style.width = `${currentWorkingAnimation.w}px`;
+  preview.style.height = `${currentWorkingAnimation.h}px`;
 }
 
 function setPlayback(playing) {
@@ -277,6 +282,26 @@ function setZoom(nextZoom) {
   applyZoom();
 }
 
+function fitZoom() {
+  if (!currentWorkingAnimation) {
+    return;
+  }
+
+  const stageWidth = previewStage.clientWidth;
+  const stageHeight = previewStage.clientHeight;
+  const contentWidth = preview.offsetWidth || stageWidth;
+  const contentHeight = preview.offsetHeight || stageHeight;
+  if (stageWidth <= 0 || stageHeight <= 0 || contentWidth <= 0 || contentHeight <= 0) {
+    currentZoom = 1;
+    applyZoom();
+    return;
+  }
+
+  const fitScale = Math.min(stageWidth / contentWidth, stageHeight / contentHeight);
+  currentZoom = Math.min(4, Math.max(0.5, fitScale));
+  applyZoom();
+}
+
 function applyZoom() {
   preview.style.transform = `scale(${currentZoom})`;
 }
@@ -320,33 +345,41 @@ async function saveCurrentAnimation() {
   const filename = toJsonFilename(currentSourceName ?? `saved-${Date.now()}.json`);
   const payloadText = JSON.stringify(currentWorkingAnimation, null, 2);
 
+  let saveResult;
   try {
-    await saveJsonToUserFile(filename, payloadText);
+    saveResult = await saveJsonToUserFile(filename, payloadText);
   } catch (error) {
-    status.textContent = error instanceof Error ? error.message : "Save cancelled.";
-    return;
+    saveResult = {
+      confirmed: false,
+      filename,
+      cancelled: true
+    };
   }
 
+  const savedFilename = saveResult.filename ?? filename;
   const record = {
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    name: filename,
-    source: currentSourceName ?? filename,
+    name: savedFilename,
+    source: currentSourceName ?? savedFilename,
     animation: structuredClone(currentWorkingAnimation),
     issues: structuredClone(currentIssues),
     size: byteSizeOfJson(currentWorkingAnimation)
   };
 
   recentEntries.unshift(record);
-  recentEntries.splice(9);
-  activeRecentId = record.id;
+  recentEntries.splice(12);
   renderRecentGrid();
 
-  savedOutput.hidden = false;
-  savedOutput.textContent = "Saved to chosen file.";
+  if (saveResult.cancelled) {
+    status.textContent = "Save cancelled.";
+    savedOutput.hidden = false;
+    savedOutput.textContent = "Save cancelled. Preview was added to recent saves.";
+    return;
+  }
 
   try {
     const response = await fetch(
-      `/api/save-json?filename=${encodeURIComponent(filename)}&source=${encodeURIComponent(currentSourceName ?? filename)}&issues=${encodeURIComponent(JSON.stringify(currentIssues))}`,
+      `/api/save-json?filename=${encodeURIComponent(savedFilename)}&source=${encodeURIComponent(currentSourceName ?? savedFilename)}&issues=${encodeURIComponent(JSON.stringify(currentIssues))}`,
       {
         method: "POST",
         headers: {
@@ -359,15 +392,21 @@ async function saveCurrentAnimation() {
     const payload = await response.json();
     if (!response.ok || !payload.ok) {
       status.textContent = payload.message ?? "Save log failed.";
+      savedOutput.hidden = false;
       savedOutput.textContent = "Saved to chosen file. Logging to out/manual failed.";
       return;
     }
 
     record.size = payload.size ?? record.size;
     renderRecentGrid();
-    savedOutput.textContent = `Saved to chosen file and logged at ${payload.output.json}`;
+
+    savedOutput.hidden = false;
+    savedOutput.textContent = saveResult.confirmed
+      ? `Saved to chosen file and logged at ${payload.output.json}`
+      : `File download started and logged at ${payload.output.json}. Preview was added to recent saves.`;
   } catch (error) {
     status.textContent = error instanceof Error ? error.message : "Save log failed.";
+    savedOutput.hidden = false;
     savedOutput.textContent = "Saved to chosen file. Logging to out/manual failed.";
   }
 }
@@ -380,21 +419,17 @@ function renderRecentGrid() {
   recentGrid.replaceChildren();
 
   for (const entry of recentEntries) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "recent-card";
-    if (entry.id === activeRecentId) {
-      button.classList.add("is-active");
-    }
+    const card = document.createElement("div");
+    card.className = "recent-card";
 
     const previewBox = document.createElement("div");
     previewBox.className = "recent-card-preview";
-    button.append(previewBox);
+    card.append(previewBox);
 
     const title = document.createElement("span");
     title.className = "recent-card-title";
     title.textContent = `${entry.name} - ${entry.size} bytes`;
-    button.append(title);
+    card.append(title);
 
     const animation = window.lottie.loadAnimation({
       container: previewBox,
@@ -409,24 +444,14 @@ function renderRecentGrid() {
     });
     recentCardAnimations.push(animation);
 
-    button.addEventListener("mouseenter", () => {
+    card.addEventListener("mouseenter", () => {
       animation.play();
     });
-    button.addEventListener("mouseleave", () => {
+    card.addEventListener("mouseleave", () => {
       animation.goToAndStop(0, true);
     });
-    button.addEventListener("click", () => {
-      activeRecentId = entry.id;
-      currentSourceName = entry.source;
-      currentIssues = structuredClone(entry.issues);
-      currentBaseAnimation = structuredClone(entry.animation);
-      currentWorkingAnimation = structuredClone(entry.animation);
-      renderWorkspace();
-      renderRecentGrid();
-      status.textContent = `Loaded saved animation ${entry.name}.`;
-    });
 
-    recentGrid.append(button);
+    recentGrid.append(card);
   }
 }
 
@@ -461,7 +486,7 @@ async function saveJsonToUserFile(filename, payloadText) {
     const writable = await handle.createWritable();
     await writable.write(payloadText);
     await writable.close();
-    return;
+    return { confirmed: true, filename: handle.name };
   }
 
   const blob = new Blob([payloadText], { type: "application/json;charset=utf-8" });
@@ -473,12 +498,34 @@ async function saveJsonToUserFile(filename, payloadText) {
   link.click();
   link.remove();
   URL.revokeObjectURL(url);
+  return { confirmed: false, filename };
 }
 
 function byteSizeOfJson(value) {
   return new TextEncoder().encode(JSON.stringify(value)).length;
 }
 
+function formatIssues(issues) {
+  if (!issues.length) {
+    return "";
+  }
+
+  return issues
+    .map((issue, index) => {
+      const parts = [`${index + 1}. [${issue.severity}] ${issue.code}: ${issue.message}`];
+      if (issue.path) {
+        parts.push(`path: ${issue.path}`);
+      }
+      if (issue.details) {
+        parts.push(`details: ${JSON.stringify(issue.details)}`);
+      }
+      return parts.join("\n");
+    })
+    .join("\n\n");
+}
+
 function formatNumber(value) {
   return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, "");
 }
+
+clearWorkspace();

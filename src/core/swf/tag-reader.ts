@@ -1,10 +1,18 @@
 import { BinaryReader } from "./binary-reader.js";
 import { BitReader } from "./bit-reader.js";
+import {
+  combineJpegWithAlpha,
+  decodeLosslessToPng,
+  mergeJpegTables,
+  normalizeJpegData
+} from "./bitmap-decode.js";
 import { parseDefineMorphShapeTag, parseDefineShapeTag } from "./shape-parser.js";
 import { SWF_TAG_NAMES } from "./tag-names.js";
 import type {
   SwfBackgroundColorTag,
   SwfControlTag,
+  SwfDefineBitmapTag,
+  SwfJpegTablesTag,
   SwfDefineShapeTag,
   SwfDefineMorphShapeTag,
   SwfDefineSpriteTag,
@@ -58,6 +66,14 @@ export function readControlTags(buffer: ArrayBuffer, startOffset: number): {
 
 function readTag(buffer: ArrayBuffer, code: number, length: number, bodyOffset: number): SwfControlTag {
   switch (code) {
+    case 6:
+      return readDefineBitsTag(buffer, code, length, bodyOffset);
+    case 8:
+      return readJpegTablesTag(buffer, length, bodyOffset);
+    case 21:
+    case 35:
+    case 36:
+      return readDefineBitmapTag(buffer, code, length, bodyOffset);
     case 2:
     case 22:
     case 32:
@@ -107,6 +123,97 @@ function readDefineMorphShapeTag(
     code,
     characterId: shape.characterId,
     paths: shape.paths
+  };
+}
+
+function readDefineBitmapTag(
+  buffer: ArrayBuffer,
+  code: 21 | 35 | 36,
+  length: number,
+  bodyOffset: number
+): SwfDefineBitmapTag {
+  const reader = new BinaryReader(buffer);
+  reader.skip(bodyOffset);
+
+  const characterId = reader.readUi16();
+  let imageData = new Uint8Array();
+  let mimeType: "image/jpeg" | "image/png" | "image/gif" = "image/jpeg";
+  let width = 0;
+  let height = 0;
+  let hasSeparateAlpha = false;
+  const bodyEnd = bodyOffset + length;
+
+  if (code === 21) {
+    imageData = new Uint8Array(reader.readBytes(bodyEnd - reader.position));
+    const bitmapInfo = inspectBitmapData(imageData);
+    mimeType = bitmapInfo.mimeType;
+    width = bitmapInfo.width;
+    height = bitmapInfo.height;
+  } else if (code === 35) {
+    const alphaDataOffset = reader.readUi32();
+    const rawImageData = new Uint8Array(reader.readBytes(alphaDataOffset));
+    const alphaData = new Uint8Array(reader.readBytes(bodyEnd - reader.position));
+    const bitmapInfo = inspectBitmapData(rawImageData);
+    width = bitmapInfo.width;
+    height = bitmapInfo.height;
+    hasSeparateAlpha = alphaData.length > 0;
+    if (bitmapInfo.mimeType === "image/jpeg" && alphaData.length > 0) {
+      imageData = new Uint8Array(combineJpegWithAlpha(normalizeJpegData(rawImageData), alphaData));
+      mimeType = "image/png";
+      hasSeparateAlpha = false;
+    } else {
+      imageData = rawImageData;
+      mimeType = bitmapInfo.mimeType;
+    }
+  } else {
+    const format = reader.readUi8();
+    width = reader.readUi16();
+    height = reader.readUi16();
+    const colorTableSize = format === 3 ? reader.readUi8() : undefined;
+    const compressed = new Uint8Array(reader.readBytes(bodyEnd - reader.position));
+    imageData = new Uint8Array(decodeLosslessToPng(format, width, height, colorTableSize, compressed));
+    mimeType = "image/png";
+  }
+
+  return {
+    code,
+    characterId,
+    mimeType,
+    data: imageData,
+    width,
+    height,
+    ...(hasSeparateAlpha ? { hasSeparateAlpha: true } : {})
+  };
+}
+
+function readDefineBitsTag(
+  buffer: ArrayBuffer,
+  code: 6,
+  length: number,
+  bodyOffset: number
+): SwfDefineBitmapTag {
+  const reader = new BinaryReader(buffer);
+  reader.skip(bodyOffset);
+  const characterId = reader.readUi16();
+  const imageData = normalizeJpegData(new Uint8Array(reader.readBytes(length - 2)));
+  const bitmapInfo = inspectBitmapData(imageData);
+
+  return {
+    code,
+    characterId,
+    mimeType: bitmapInfo.mimeType,
+    data: imageData,
+    width: bitmapInfo.width,
+    height: bitmapInfo.height
+  };
+}
+
+function readJpegTablesTag(buffer: ArrayBuffer, length: number, bodyOffset: number): SwfJpegTablesTag {
+  const reader = new BinaryReader(buffer);
+  reader.skip(bodyOffset);
+  return {
+    code: 8,
+    data: new Uint8Array(reader.readBytes(length))
   };
 }
 
@@ -247,6 +354,90 @@ function createUnknownTag(code: number, length: number, bodyOffset: number): Swf
     length,
     bodyOffset
   };
+}
+
+function inspectBitmapData(bytes: Uint8Array): {
+  mimeType: "image/jpeg" | "image/png" | "image/gif";
+  width: number;
+  height: number;
+} {
+  if (isPng(bytes)) {
+    return {
+      mimeType: "image/png",
+      width: readPngDimension(bytes, 16),
+      height: readPngDimension(bytes, 20)
+    };
+  }
+
+  if (isGif(bytes)) {
+    return {
+      mimeType: "image/gif",
+      width: readLittleEndian16(bytes, 6),
+      height: readLittleEndian16(bytes, 8)
+    };
+  }
+
+  return {
+    mimeType: "image/jpeg",
+    ...readJpegDimensions(bytes)
+  };
+}
+
+function isPng(bytes: Uint8Array): boolean {
+  return bytes.length >= 24 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47;
+}
+
+function isGif(bytes: Uint8Array): boolean {
+  return bytes.length >= 10 &&
+    bytes[0] === 0x47 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46;
+}
+
+function readPngDimension(bytes: Uint8Array, offset: number): number {
+  return ((bytes[offset] ?? 0) << 24) |
+    ((bytes[offset + 1] ?? 0) << 16) |
+    ((bytes[offset + 2] ?? 0) << 8) |
+    (bytes[offset + 3] ?? 0);
+}
+
+function readLittleEndian16(bytes: Uint8Array, offset: number): number {
+  return (bytes[offset] ?? 0) | ((bytes[offset + 1] ?? 0) << 8);
+}
+
+function readJpegDimensions(bytes: Uint8Array): { width: number; height: number } {
+  let offset = 2;
+  while (offset + 8 < bytes.length) {
+    if (bytes[offset] !== 0xff) {
+      offset += 1;
+      continue;
+    }
+
+    const marker = bytes[offset + 1] ?? 0;
+    if (marker === 0xc0 || marker === 0xc1 || marker === 0xc2 || marker === 0xc3) {
+      return {
+        height: ((bytes[offset + 5] ?? 0) << 8) | (bytes[offset + 6] ?? 0),
+        width: ((bytes[offset + 7] ?? 0) << 8) | (bytes[offset + 8] ?? 0)
+      };
+    }
+
+    if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) {
+      offset += 2;
+      continue;
+    }
+
+    const segmentLength = ((bytes[offset + 2] ?? 0) << 8) | (bytes[offset + 3] ?? 0);
+    if (segmentLength < 2) {
+      break;
+    }
+    offset += 2 + segmentLength;
+  }
+
+  return { width: 0, height: 0 };
 }
 
 function readMatrix(buffer: ArrayBuffer, startOffset: number): {

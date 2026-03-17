@@ -10,9 +10,9 @@ This project is entirely coded by OpenAI Codex. I did not even read the code yet
 
 The project is intentionally narrow:
 
-- supported input is vector timeline data only;
+- supported input is Flash timeline data within a strict supported subset, currently including vectors and a limited bitmap subset;
 - supported timeline state includes nested display objects, motion tweens, shape tweens and color effects: alpha, tint and brightness;
-- supported graphics include solid fills, gradients, solid strokes, most stroke styles and primitive vector masks;
+- supported graphics include solid fills, gradients, bitmap fills, solid strokes, most stroke styles and primitive vector masks;
 - unsupported features should produce explicit diagnostics, not heuristic output.
 
 ## Architecture
@@ -43,6 +43,7 @@ Supported on the current branch:
 - nested display object timelines;
 - motion tween style transform animation exported as `Lottie` keyframes;
 - shape tween / morph shape animation;
+- bitmap assets and bitmap-filled shapes;
 - solid fills;
 - linear and radial gradients;
 - solid strokes;
@@ -51,11 +52,24 @@ Supported on the current branch:
 
 Still intentionally out of scope and probably never will be supported:
 
-- raster assets;
 - audio;
 - ActionScript / runtime code;
 - filters, blend modes and other renderer-specific effects;
 - heuristic reconstruction of unsupported Flash features.
+
+Bitmap support currently covers the simple cases used by the current fixtures:
+
+- embedded JPEG, PNG and GIF bitmap assets;
+- `JPEG3` style image + alpha reconstruction into PNG;
+- bitmap-filled shapes exported as masked `Lottie` image layers;
+- repeated bitmap fills exported as tiled image layers clipped by the vector shape;
+- bitmap motion tween transforms, including rotation, scale and skew.
+
+Known bitmap limitation:
+
+- bitmap `alpha` is exported;
+- bitmap `tint` and `brightness` are not exported exactly and should warn;
+- complex bitmap fill cases still rely on image-layer tiling and masking, because `Lottie` does not provide a native bitmap fill style for vector shapes.
 
 ## Fixtures
 
@@ -84,7 +98,7 @@ Then open `http://127.0.0.1:4173`.
 The page provides:
 
 - a `Choose SWF file` button;
-- a `Convert` button;
+- automatic conversion after file selection;
 - an embedded `Lottie` preview area;
 - a short issue list if conversion returns warnings or errors.
 

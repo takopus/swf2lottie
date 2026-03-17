@@ -14,14 +14,13 @@
             <input id="file-input" type="file" accept=".swf,application/x-shockwave-flash" />
             <span>Choose SWF file</span>
           </label>
-          <button id="convert-button" type="button" disabled>Convert</button>
         </div>
         <p id="status" class="status">No file selected.</p>
       </section>
 
       <section id="workspace" class="workspace" hidden>
         <div class="preview-column">
-          <div id="preview-frame" class="preview-frame">
+          <div class="preview-frame">
             <div id="preview-stage" class="preview-stage">
               <div id="preview" class="preview-surface" aria-label="Lottie preview"></div>
             </div>
@@ -39,6 +38,7 @@
                 <button id="zoom-out" type="button" aria-label="Zoom out">Zoom out</button>
                 <button id="zoom-reset" type="button" aria-label="Reset zoom">100%</button>
                 <button id="zoom-in" type="button" aria-label="Zoom in">Zoom in</button>
+                <button id="zoom-fit" type="button" aria-label="Fit preview">Fit</button>
               </div>
             </div>
           </div>
@@ -50,24 +50,26 @@
             <p id="summary" class="summary">No converted file selected.</p>
             <div class="summary-actions">
               <span id="issue-counts" class="issue-counts">0 warnings, 0 errors</span>
-              <button id="toggle-output" type="button">Show output</button>
+              <button id="toggle-output" type="button" hidden>Show output</button>
             </div>
           </section>
 
           <section class="properties-card">
             <h2>Properties</h2>
-            <label class="field">
-              <span>fps</span>
-              <input id="fps-input" type="number" min="1" step="0.01" />
-            </label>
-            <label class="field">
-              <span>width</span>
-              <input id="width-input" type="number" min="1" step="1" />
-            </label>
-            <label class="field">
-              <span>height</span>
-              <input id="height-input" type="number" min="1" step="1" />
-            </label>
+            <div class="properties-fields">
+              <label class="field">
+                <span>fps</span>
+                <input id="fps-input" type="number" min="1" step="0.01" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>width</span>
+                <input id="width-input" type="number" min="1" step="1" autocomplete="off" />
+              </label>
+              <label class="field">
+                <span>height</span>
+                <input id="height-input" type="number" min="1" step="1" autocomplete="off" />
+              </label>
+            </div>
             <div class="property-actions">
               <button id="update-preview" type="button" disabled>Update preview</button>
               <button id="save-json" type="button" disabled>Save JSON</button>
@@ -84,7 +86,7 @@
       <section class="recent-panel">
         <div class="recent-header">
           <h2>Recent saves</h2>
-          <p>Up to 9 most recent saved animations in this session.</p>
+          <p>Up to 12 most recent saved animations in this session.</p>
         </div>
         <div id="recent-grid" class="recent-grid"></div>
       </section>

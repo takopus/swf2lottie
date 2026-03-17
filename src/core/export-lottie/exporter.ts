@@ -1,4 +1,5 @@
 import type {
+  FlashBitmapSymbol,
   FlashColorTransform,
   FlashDisplayObjectState,
   FlashDocument,
@@ -29,6 +30,8 @@ interface TransformSample {
   position: [number, number, number];
   rotation: number;
   scale: [number, number, number];
+  skew: number;
+  skewAxis: number;
   opacity: number;
   colorTransform: FlashColorTransform;
 }
@@ -58,6 +61,27 @@ interface ShapeStyleGroup {
   paths: FlashShapePath[];
 }
 
+interface LayerExportSpec {
+  name: string;
+  kind: "shape" | "bitmap";
+  index: number;
+  shapes?: Record<string, unknown>[];
+  bitmapSymbol?: FlashBitmapSymbol;
+  bitmapFill?: Extract<FlashShapePath["fill"], { kind: "bitmap" }>;
+  transformSamples?: TransformSample[];
+  hasUnsupportedBitmapColor?: boolean;
+  clipMasks?: Record<string, unknown>[];
+}
+
+interface PixelMatrix2d {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  tx: number;
+  ty: number;
+}
+
 type FlashSymbolMap = Map<string, FlashDocument["symbols"][number]>;
 
 export function exportToLottie(document: FlashDocument): {
@@ -66,6 +90,8 @@ export function exportToLottie(document: FlashDocument): {
 } {
   const issues: ConversionIssue[] = [];
   const symbolMap: FlashSymbolMap = new Map(document.symbols.map((symbol) => [symbol.id, symbol]));
+  const bitmapAssets: Record<string, unknown>[] = [];
+  const bitmapAssetIds = new Map<string, string>();
   const root = symbolMap.get(document.rootTimelineId);
 
   if (!root || root.kind !== "movieclip") {
@@ -81,7 +107,7 @@ export function exportToLottie(document: FlashDocument): {
     };
   }
 
-  const layers = exportTimelineLayers(root.timeline, document, symbolMap, issues);
+  const layers = exportTimelineLayers(root.timeline, document, symbolMap, bitmapAssets, bitmapAssetIds, issues);
 
   if (layers.length === 0) {
     issues.push({
@@ -104,7 +130,7 @@ export function exportToLottie(document: FlashDocument): {
             h: document.height,
             nm: "swf2lottie",
             ddd: 0,
-            assets: [],
+            assets: bitmapAssets,
             layers
           }
         : null
@@ -117,7 +143,8 @@ function exportMovieClipAsset(
   symbol: FlashMovieClipSymbol,
   document: FlashDocument,
   symbolMap: FlashSymbolMap,
-  _assetIds: Map<string, string>,
+  bitmapAssets: Record<string, unknown>[],
+  bitmapAssetIds: Map<string, string>,
   issues: ConversionIssue[]
 ): Record<string, unknown> {
   return {
@@ -126,7 +153,7 @@ function exportMovieClipAsset(
     fr: document.frameRate,
     w: document.width,
     h: document.height,
-    layers: exportTimelineLayers(symbol.timeline, document, symbolMap, issues)
+    layers: exportTimelineLayers(symbol.timeline, document, symbolMap, bitmapAssets, bitmapAssetIds, issues)
   };
 }
 
@@ -134,6 +161,8 @@ function exportTimelineLayers(
   timeline: FlashTimeline,
   document: FlashDocument,
   symbolMap: FlashSymbolMap,
+  bitmapAssets: Record<string, unknown>[],
+  bitmapAssetIds: Map<string, string>,
   issues: ConversionIssue[]
 ): Record<string, unknown>[] {
   const tracks = buildTimelineTracks(timeline);
@@ -141,7 +170,7 @@ function exportTimelineLayers(
 
   const layers = tracks
     .sort((left, right) => right.depth - left.depth)
-    .flatMap((track) => exportTrack(track, trackMap, timeline, document, symbolMap, issues));
+    .flatMap((track) => exportTrack(track, trackMap, timeline, document, symbolMap, bitmapAssets, bitmapAssetIds, issues));
 
   return layers.map((layer, index) => ({
     ...layer,
@@ -155,6 +184,8 @@ function exportTrack(
   timeline: FlashTimeline,
   document: FlashDocument,
   symbolMap: FlashSymbolMap,
+  bitmapAssets: Record<string, unknown>[],
+  bitmapAssetIds: Map<string, string>,
   issues: ConversionIssue[]
 ): Record<string, unknown>[] {
   if (track.samples.some((sample) => sample?.isMask)) {
@@ -196,6 +227,23 @@ function exportTrack(
   };
 
   if (symbol.kind === "shape") {
+    if (symbol.paths.some((path) => path.fill?.kind === "bitmap")) {
+      return exportShapeTrackWithBitmapFills(
+        track,
+        symbol,
+        timeline,
+        baseLayer,
+        transformSamples,
+        track.samples,
+        shouldBakeLayerTransform,
+        symbolMap,
+        bitmapAssets,
+        bitmapAssetIds,
+        maskProperties,
+        issues
+      );
+    }
+
     const sourceSamples = shouldBakeLayerTransform ? track.samples : undefined;
     const shapes = sortShapeGroups(exportShapePaths(symbol.paths, issues, transformSamples, sourceSamples));
     if (shapes.length === 0) {
@@ -207,7 +255,9 @@ function exportTrack(
           ...sample,
           position: [0, 0, 0] as [number, number, number],
           rotation: 0,
-          scale: [100, 100, 100] as [number, number, number]
+          scale: [100, 100, 100] as [number, number, number],
+          skew: 0,
+          skewAxis: 0
         }))
       : transformSamples;
 
@@ -218,6 +268,43 @@ function exportTrack(
         ty: 4,
         shapes,
         ...(maskProperties.length > 0 ? { hasMask: true, masksProperties: maskProperties } : {})
+      }
+    ];
+  }
+
+  if (symbol.kind === "bitmap") {
+    const assetId = ensureBitmapAsset(symbol, bitmapAssets, bitmapAssetIds);
+    const hasUnsupportedColor = transformSamples.some((sample) =>
+      sample.colorTransform.tint !== undefined || sample.colorTransform.brightness !== undefined
+    );
+
+    if (symbol.hasSeparateAlpha) {
+      issues.push({
+        code: "unsupported_feature",
+        severity: "warning",
+        message: "Bitmap assets with separate alpha data are exported without alpha reconstruction.",
+        path: track.id,
+        details: { symbolId: symbol.id }
+      });
+    }
+
+    if (hasUnsupportedColor) {
+      issues.push({
+        code: "unsupported_color_transform",
+        severity: "warning",
+        message: "Bitmap tint and brightness are not exported yet. Only alpha is applied.",
+        path: track.id,
+        details: { symbolId: symbol.id }
+      });
+    }
+
+    return [
+      {
+        ...baseLayer,
+        ty: 2,
+        refId: assetId,
+        w: symbol.width,
+        h: symbol.height
       }
     ];
   }
@@ -235,7 +322,9 @@ function exportTrack(
           ...sample,
           position: [0, 0, 0] as [number, number, number],
           rotation: 0,
-          scale: [100, 100, 100] as [number, number, number]
+          scale: [100, 100, 100] as [number, number, number],
+          skew: 0,
+          skewAxis: 0
         }))
       : transformSamples;
 
@@ -251,18 +340,16 @@ function exportTrack(
   }
 
   if (canFlattenStaticMovieClip(symbol, symbolMap)) {
-    const shapes = exportStaticMovieClipShapes(symbol, symbolMap, issues, transformSamples);
-    if (shapes.length === 0) {
-      return [];
-    }
-
-    return [
-      {
-        ...baseLayer,
-        ty: 4,
-        shapes
-      }
-    ];
+    return exportStaticMovieClipLayers(
+      track,
+      symbol,
+      timeline,
+      document,
+      symbolMap,
+      bitmapAssets,
+      bitmapAssetIds,
+      issues
+    );
   }
 
   return exportMovieClipAsFlattenedLayers(track, symbol, timeline.frames.length, symbolMap, issues).map(
@@ -333,11 +420,15 @@ function toTransformSample(
     return null;
   }
 
+  const decomposition = decomposeMatrix(sample.matrix);
+
   return {
     frame,
     position: [sample.matrix.tx / 20, sample.matrix.ty / 20, 0],
-    rotation: rotationFromMatrix(sample.matrix),
-    scale: [scalePercentFromMatrixX(sample), scalePercentFromMatrixY(sample), 100],
+    rotation: decomposition.rotation,
+    scale: [decomposition.scaleX, decomposition.scaleY, 100],
+    skew: decomposition.skew,
+    skewAxis: decomposition.skewAxis,
     opacity: clamp(sample.colorTransform.alpha * 100, 0, 100),
     colorTransform: sample.colorTransform
   };
@@ -349,7 +440,9 @@ function exportTransformSamples(samples: TransformSample[]): Record<string, unkn
     r: exportScalarProperty(samples.map((sample) => ({ frame: sample.frame, value: sample.rotation }))),
     p: exportVectorProperty(samples.map((sample) => ({ frame: sample.frame, value: sample.position }))),
     a: { a: 0, k: [0, 0, 0] },
-    s: exportVectorProperty(samples.map((sample) => ({ frame: sample.frame, value: sample.scale })))
+    s: exportVectorProperty(samples.map((sample) => ({ frame: sample.frame, value: sample.scale }))),
+    sk: exportScalarProperty(samples.map((sample) => ({ frame: sample.frame, value: sample.skew }))),
+    sa: exportScalarProperty(samples.map((sample) => ({ frame: sample.frame, value: sample.skewAxis })))
   };
 }
 
@@ -405,6 +498,207 @@ function exportShapePaths(
   }
 
   return exported;
+}
+
+function exportShapeTrackWithBitmapFills(
+  track: TimelineTrack,
+  symbol: FlashShapeSymbol,
+  timeline: FlashTimeline,
+  baseLayer: Record<string, unknown>,
+  transformSamples: TransformSample[],
+  sourceSamples: Array<FlashDisplayObjectState | null>,
+  shouldBakeLayerTransform: boolean,
+  symbolMap: FlashSymbolMap,
+  bitmapAssets: Record<string, unknown>[],
+  bitmapAssetIds: Map<string, string>,
+  maskProperties: Record<string, unknown>[],
+  issues: ConversionIssue[]
+): Record<string, unknown>[] {
+  const groups = groupPathsByStyle(symbol.paths);
+  const layerSpecs: LayerExportSpec[] = [];
+
+  for (const group of groups) {
+    const bitmapFill = group.fill?.kind === "bitmap" ? group.fill : undefined;
+
+    if (bitmapFill) {
+      const bitmapSymbol = symbolMap.get(bitmapFill.bitmapId);
+      if (!bitmapSymbol || bitmapSymbol.kind !== "bitmap") {
+        issues.push({
+          code: "unsupported_feature",
+          severity: "warning",
+          message: "Bitmap fill references a missing bitmap symbol.",
+          path: track.id,
+          details: { bitmapId: bitmapFill.bitmapId }
+        });
+        continue;
+      }
+
+      if (bitmapFill.repeat) {
+        issues.push({
+          code: "unsupported_feature",
+          severity: "warning",
+          message: "Repeated bitmap fills are currently exported as a single image sample.",
+          path: track.id,
+          details: { bitmapId: bitmapSymbol.id }
+        });
+      }
+
+      const tileOffsets = bitmapFill.repeat
+        ? computeBitmapTileOffsets(group.paths, bitmapFill, bitmapSymbol)
+        : [{ x: 0, y: 0 }];
+
+      if (tileOffsets.length > 64) {
+        issues.push({
+          code: "unsupported_feature",
+          severity: "warning",
+          message: "Bitmap fill tiling required too many image copies. Export was limited.",
+          path: track.id,
+          details: { bitmapId: bitmapSymbol.id, tiles: tileOffsets.length }
+        });
+      }
+
+      for (const offset of tileOffsets.slice(0, 64)) {
+        const combinedSamples = sourceSamples
+          .map((sample, frame) => toBitmapTransformSample(frame, sample, bitmapFill, offset))
+          .filter((sample): sample is TransformSample => sample !== null);
+
+        if (combinedSamples.length === 0) {
+          continue;
+        }
+
+        const tileMatrix = multiplyPixelMatrices(
+          bitmapFillToPixelMatrix(bitmapFill),
+          translationPixelMatrix(offset.x, offset.y)
+        );
+
+        layerSpecs.push({
+          name: `${track.name ?? track.id}:bitmap:${group.index}:${offset.x}:${offset.y}`,
+          kind: "bitmap",
+          index: group.index,
+          bitmapSymbol,
+          bitmapFill,
+          transformSamples: combinedSamples,
+          clipMasks: exportBitmapFillClipMasks(group.paths, tileMatrix),
+          hasUnsupportedBitmapColor: combinedSamples.some((sample) =>
+            sample.colorTransform.tint !== undefined || sample.colorTransform.brightness !== undefined
+          )
+        });
+      }
+      continue;
+    }
+
+    const bakedSamples = shouldBakeLayerTransform ? sourceSamples : undefined;
+    const shapes = exportShapePaths(group.paths, issues, transformSamples, bakedSamples);
+    if (shapes.length === 0) {
+      continue;
+    }
+
+    const layerTransformSamples = shouldBakeLayerTransform
+      ? transformSamples.map((sample) => ({
+          ...sample,
+          position: [0, 0, 0] as [number, number, number],
+          rotation: 0,
+          scale: [100, 100, 100] as [number, number, number],
+          skew: 0,
+          skewAxis: 0
+        }))
+      : transformSamples;
+
+    layerSpecs.push({
+      name: `${track.name ?? track.id}:shape:${group.index}`,
+      kind: "shape",
+      index: group.index,
+      shapes,
+      transformSamples: layerTransformSamples
+    });
+  }
+
+  const hasBitmapLayer = layerSpecs.some((spec) => spec.kind === "bitmap");
+
+  return layerSpecs
+    .sort((left, right) => hasBitmapLayer ? right.index - left.index : compareLayerSpecPriority(left, right))
+    .reduce<Record<string, unknown>[]>((layers, spec) => {
+      if (spec.kind === "shape") {
+        layers.push(
+          {
+            ...baseLayer,
+            nm: spec.name,
+            ks: exportTransformSamples(spec.transformSamples ?? transformSamples),
+            ty: 4,
+            shapes: spec.shapes,
+            ...(maskProperties.length > 0 ? { hasMask: true, masksProperties: maskProperties } : {})
+          }
+        );
+        return layers;
+      }
+
+      if (!spec.bitmapSymbol || !spec.bitmapFill || !spec.transformSamples) {
+        return layers;
+      }
+
+      if (spec.bitmapSymbol.hasSeparateAlpha) {
+        issues.push({
+          code: "unsupported_feature",
+          severity: "warning",
+          message: "Bitmap assets with separate alpha data are exported without alpha reconstruction.",
+          path: track.id,
+          details: { symbolId: spec.bitmapSymbol.id }
+        });
+      }
+
+      if (spec.hasUnsupportedBitmapColor) {
+        issues.push({
+          code: "unsupported_color_transform",
+          severity: "warning",
+          message: "Bitmap tint and brightness are not exported yet. Only alpha is applied.",
+          path: track.id,
+          details: { symbolId: spec.bitmapSymbol.id }
+        });
+      }
+
+      const assetId = ensureBitmapAsset(spec.bitmapSymbol, bitmapAssets, bitmapAssetIds);
+      layers.push({
+        ...baseLayer,
+        nm: spec.name,
+        ks: exportTransformSamples(spec.transformSamples),
+        ty: 2,
+        refId: assetId,
+        w: spec.bitmapSymbol.width,
+        h: spec.bitmapSymbol.height,
+        ...(
+          maskProperties.length > 0 || (spec.clipMasks?.length ?? 0) > 0
+            ? {
+                hasMask: true,
+                masksProperties: [...(spec.clipMasks ?? []), ...maskProperties]
+              }
+            : {}
+        )
+      });
+      return layers;
+    }, []);
+}
+
+function exportBitmapFillClipMasks(
+  paths: FlashShapePath[],
+  pixelMatrix: PixelMatrix2d
+): Record<string, unknown>[] {
+  const inverse = invertPixelMatrix(pixelMatrix);
+  if (!inverse) {
+    return [];
+  }
+
+  return paths.map((path, index) => ({
+    mode: "a",
+    inv: false,
+    cl: true,
+    nm: `bitmap-fill-mask:${index + 1}`,
+    o: { a: 0, k: 100 },
+    pt: {
+      a: 0,
+      k: transformBezierGeometryWithPixelMatrix(path.geometry, inverse)
+    },
+    x: { a: 0, k: 0 }
+  }));
 }
 
 function groupPathsByStyle(paths: FlashShapePath[]): ShapeStyleGroup[] {
@@ -496,6 +790,61 @@ function exportStaticMovieClipShapes(
     .flatMap((instance) => exportStaticInstanceShapes(instance, symbolMap, issues, transformSamples)));
 }
 
+function exportStaticMovieClipLayers(
+  track: TimelineTrack,
+  symbol: FlashMovieClipSymbol,
+  timeline: FlashTimeline,
+  document: FlashDocument,
+  symbolMap: FlashSymbolMap,
+  bitmapAssets: Record<string, unknown>[],
+  bitmapAssetIds: Map<string, string>,
+  issues: ConversionIssue[]
+): Record<string, unknown>[] {
+  const frame = symbol.timeline.frames[0];
+  if (!frame) {
+    return [];
+  }
+
+  return frame.displayList
+    .slice()
+    .sort((left, right) => right.depth - left.depth)
+    .flatMap((instance) => {
+      const samples = track.samples.map((parentSample) =>
+        parentSample ? combineDisplayStates(parentSample, instance, `${track.id}/${instance.id}`, [track.depth, instance.depth]) : null
+      );
+      const firstFrame = samples.findIndex((sample) => sample !== null);
+      if (firstFrame === -1) {
+        return [];
+      }
+
+      let lastFrame = samples.length - 1;
+      while (lastFrame >= 0 && samples[lastFrame] === null) {
+        lastFrame -= 1;
+      }
+
+      const childTrack: TimelineTrack = {
+        id: `${track.id}/${instance.id}`,
+        depth: instance.depth,
+        symbolId: instance.symbolId,
+        firstFrame,
+        lastFrame,
+        samples,
+        ...(instance.name ? { name: instance.name } : {})
+      };
+
+      return exportTrack(
+        childTrack,
+        new Map<string, TimelineTrack>(),
+        timeline,
+        document,
+        symbolMap,
+        bitmapAssets,
+        bitmapAssetIds,
+        issues
+      );
+    });
+}
+
 function exportStaticInstanceShapes(
   instance: FlashDisplayObjectState,
   symbolMap: FlashSymbolMap,
@@ -541,6 +890,17 @@ function exportStaticInstanceShapes(
         ]
       }
     ];
+  }
+
+  if (symbol.kind === "bitmap") {
+    issues.push({
+      code: "unsupported_feature",
+      severity: "warning",
+      message: "Bitmap instances inside static shape flattening are not exported inline yet.",
+      path: instance.id,
+      details: { symbolId: symbol.id }
+    });
+    return [];
   }
 
   if (!canFlattenStaticMovieClip(symbol, symbolMap)) {
@@ -694,6 +1054,10 @@ function collectFlattenedFromMovieClipFrame(
       continue;
     }
 
+    if (childSymbol.kind !== "movieclip") {
+      continue;
+    }
+
     const childFrame = mod(symbolFrame - childTrack.firstFrame, childSymbol.timeline.frames.length);
     collectFlattenedFromMovieClipFrame(
       childSymbol,
@@ -724,6 +1088,139 @@ function combineDisplayStates(
     colorTransform: combineColorTransforms(parent.colorTransform, child.colorTransform),
     ...(child.ratio !== undefined ? { ratio: child.ratio } : {})
   };
+}
+
+function toBitmapTransformSample(
+  frame: number,
+  sample: FlashDisplayObjectState | null,
+  fill: Extract<FlashShapePath["fill"], { kind: "bitmap" }>,
+  offset: { x: number; y: number } = { x: 0, y: 0 }
+): TransformSample | null {
+  if (!sample) {
+    return null;
+  }
+
+  return toTransformSample(
+    frame,
+    {
+      ...sample,
+      matrix: multiplyMatrices(
+        sample.matrix,
+        multiplyMatrices(
+          bitmapFillMatrixToDisplayMatrix(fill),
+          translationDisplayMatrix(offset.x, offset.y)
+        )
+      )
+    },
+    [],
+    "bitmap-fill"
+  );
+}
+
+function bitmapFillMatrixToDisplayMatrix(
+  fill: Extract<FlashShapePath["fill"], { kind: "bitmap" }>
+): FlashDisplayObjectState["matrix"] {
+  return {
+    a: fill.matrix.a / 20,
+    b: fill.matrix.b / 20,
+    c: fill.matrix.c / 20,
+    d: fill.matrix.d / 20,
+    tx: fill.matrix.tx * 20,
+    ty: fill.matrix.ty * 20
+  };
+}
+
+function bitmapFillToPixelMatrix(
+  fill: Extract<FlashShapePath["fill"], { kind: "bitmap" }>
+): PixelMatrix2d {
+  return {
+    a: fill.matrix.a / 20,
+    b: fill.matrix.b / 20,
+    c: fill.matrix.c / 20,
+    d: fill.matrix.d / 20,
+    tx: fill.matrix.tx,
+    ty: fill.matrix.ty
+  };
+}
+
+function translationDisplayMatrix(x: number, y: number): FlashDisplayObjectState["matrix"] {
+  return {
+    a: 1,
+    b: 0,
+    c: 0,
+    d: 1,
+    tx: x * 20,
+    ty: y * 20
+  };
+}
+
+function translationPixelMatrix(x: number, y: number): PixelMatrix2d {
+  return {
+    a: 1,
+    b: 0,
+    c: 0,
+    d: 1,
+    tx: x,
+    ty: y
+  };
+}
+
+function computeBitmapTileOffsets(
+  paths: FlashShapePath[],
+  fill: Extract<FlashShapePath["fill"], { kind: "bitmap" }>,
+  bitmap: FlashBitmapSymbol
+): Array<{ x: number; y: number }> {
+  const inverse = invertPixelMatrix(bitmapFillToPixelMatrix(fill));
+  if (!inverse) {
+    return [{ x: 0, y: 0 }];
+  }
+
+  const bounds = boundsInLocalBitmapSpace(paths, inverse);
+  if (!bounds) {
+    return [{ x: 0, y: 0 }];
+  }
+
+  const startTileX = Math.floor(bounds.minX / bitmap.width);
+  const endTileX = Math.floor((bounds.maxX - 1e-6) / bitmap.width);
+  const startTileY = Math.floor(bounds.minY / bitmap.height);
+  const endTileY = Math.floor((bounds.maxY - 1e-6) / bitmap.height);
+  const offsets: Array<{ x: number; y: number }> = [];
+
+  for (let tileY = startTileY; tileY <= endTileY; tileY += 1) {
+    for (let tileX = startTileX; tileX <= endTileX; tileX += 1) {
+      offsets.push({
+        x: tileX * bitmap.width,
+        y: tileY * bitmap.height
+      });
+    }
+  }
+
+  return offsets.length > 0 ? offsets : [{ x: 0, y: 0 }];
+}
+
+function boundsInLocalBitmapSpace(
+  paths: FlashShapePath[],
+  inverseMatrix: PixelMatrix2d
+): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  const points = paths.flatMap((path) => path.geometry.vertices);
+  if (points.length === 0) {
+    return null;
+  }
+
+  return points.reduce<{ minX: number; minY: number; maxX: number; maxY: number }>((bounds, point) => {
+    const [x, y] = applyPixelMatrixToPointWithMatrix(point, inverseMatrix);
+    return {
+      minX: Math.min(bounds.minX, x),
+      minY: Math.min(bounds.minY, y),
+      maxX: Math.max(bounds.maxX, x),
+      maxY: Math.max(bounds.maxY, y)
+    };
+  }, {
+    minX: Number.POSITIVE_INFINITY,
+    minY: Number.POSITIVE_INFINITY,
+    maxX: Number.NEGATIVE_INFINITY,
+    maxY: Number.NEGATIVE_INFINITY
+  });
 }
 
 function multiplyMatrices(
@@ -946,6 +1443,22 @@ function transformBezierGeometry(
     const tangent = geometry.outTangents[index] ?? [0, 0];
     return applyMatrixToVector(tangent, matrix);
   });
+
+  return {
+    c: geometry.closed,
+    v: vertices,
+    i: inTangents,
+    o: outTangents
+  };
+}
+
+function transformBezierGeometryWithPixelMatrix(
+  geometry: FlashShapePath["geometry"],
+  matrix: { a: number; b: number; c: number; d: number; tx: number; ty: number }
+): Record<string, unknown> {
+  const vertices = geometry.vertices.map(([x, y]) => applyPixelMatrixToPointWithMatrix([x, y], matrix));
+  const inTangents = geometry.inTangents.map((tangent) => applyPixelMatrixToVectorWithMatrix(tangent, matrix));
+  const outTangents = geometry.outTangents.map((tangent) => applyPixelMatrixToVectorWithMatrix(tangent, matrix));
 
   return {
     c: geometry.closed,
@@ -1359,15 +1872,15 @@ function canFlattenStaticMovieClip(
 }
 
 function rotationFromMatrix(matrix: FlashDisplayObjectState["matrix"]): number {
-  return (Math.atan2(matrix.b, matrix.a) * 180) / Math.PI;
+  return decomposeMatrix(matrix).rotation;
 }
 
 function scalePercentFromMatrixX(sample: FlashDisplayObjectState): number {
-  return Math.sqrt(sample.matrix.a ** 2 + sample.matrix.b ** 2) * 100;
+  return decomposeMatrix(sample.matrix).scaleX;
 }
 
 function scalePercentFromMatrixY(sample: FlashDisplayObjectState): number {
-  return Math.sqrt(sample.matrix.c ** 2 + sample.matrix.d ** 2) * 100;
+  return decomposeMatrix(sample.matrix).scaleY;
 }
 
 function needsBakedMatrix(samples: Array<FlashDisplayObjectState | null>): boolean {
@@ -1377,6 +1890,67 @@ function needsBakedMatrix(samples: Array<FlashDisplayObjectState | null>): boole
 function hasShear(matrix: FlashDisplayObjectState["matrix"]): boolean {
   const dot = matrix.a * matrix.c + matrix.b * matrix.d;
   return Math.abs(dot) > 1e-6;
+}
+
+function decomposeMatrix(matrix: FlashDisplayObjectState["matrix"]): {
+  rotation: number;
+  scaleX: number;
+  scaleY: number;
+  skew: number;
+  skewAxis: number;
+} {
+  const rotation = (Math.atan2(-matrix.c, matrix.d) * 180) / Math.PI;
+  const unrotated = multiplyMatrices2d(
+    rotationMatrix2d(-rotation),
+    {
+      a: matrix.a,
+      b: matrix.b,
+      c: matrix.c,
+      d: matrix.d
+    }
+  );
+  const scaleXRaw = unrotated.a;
+  const scaleYRaw = unrotated.d;
+
+  if (Math.abs(scaleXRaw) < 1e-8) {
+    return {
+      rotation: 0,
+      scaleX: 0,
+      scaleY: Math.hypot(matrix.c, matrix.d) * 100,
+      skew: 0,
+      skewAxis: 0
+    };
+  }
+
+  return {
+    rotation,
+    scaleX: scaleXRaw * 100,
+    scaleY: scaleYRaw * 100,
+    skew: (Math.atan2(unrotated.b, scaleXRaw) * 180) / Math.PI,
+    skewAxis: 90
+  };
+}
+
+function multiplyMatrices2d(
+  left: { a: number; b: number; c: number; d: number },
+  right: { a: number; b: number; c: number; d: number }
+): { a: number; b: number; c: number; d: number } {
+  return {
+    a: left.a * right.a + left.c * right.b,
+    b: left.b * right.a + left.d * right.b,
+    c: left.a * right.c + left.c * right.d,
+    d: left.b * right.c + left.d * right.d
+  };
+}
+
+function rotationMatrix2d(rotation: number): { a: number; b: number; c: number; d: number } {
+  const radians = (rotation * Math.PI) / 180;
+  return {
+    a: Math.cos(radians),
+    b: Math.sin(radians),
+    c: -Math.sin(radians),
+    d: Math.cos(radians)
+  };
 }
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -1521,6 +2095,55 @@ function applyPixelMatrixToPoint(
   ];
 }
 
+function applyPixelMatrixToPointWithMatrix(
+  point: [number, number],
+  matrix: { a: number; b: number; c: number; d: number; tx: number; ty: number }
+): [number, number] {
+  return [
+    matrix.a * point[0] + matrix.c * point[1] + matrix.tx,
+    matrix.b * point[0] + matrix.d * point[1] + matrix.ty
+  ];
+}
+
+function applyPixelMatrixToVectorWithMatrix(
+  vector: [number, number],
+  matrix: PixelMatrix2d
+): [number, number] {
+  return [
+    matrix.a * vector[0] + matrix.c * vector[1],
+    matrix.b * vector[0] + matrix.d * vector[1]
+  ];
+}
+
+function invertPixelMatrix(
+  matrix: PixelMatrix2d
+): PixelMatrix2d | null {
+  const determinant = matrix.a * matrix.d - matrix.b * matrix.c;
+  if (Math.abs(determinant) < 1e-8) {
+    return null;
+  }
+
+  return {
+    a: matrix.d / determinant,
+    b: -matrix.b / determinant,
+    c: -matrix.c / determinant,
+    d: matrix.a / determinant,
+    tx: (matrix.c * matrix.ty - matrix.d * matrix.tx) / determinant,
+    ty: (matrix.b * matrix.tx - matrix.a * matrix.ty) / determinant
+  };
+}
+
+function multiplyPixelMatrices(left: PixelMatrix2d, right: PixelMatrix2d): PixelMatrix2d {
+  return {
+    a: left.a * right.a + left.c * right.b,
+    b: left.b * right.a + left.d * right.b,
+    c: left.a * right.c + left.c * right.d,
+    d: left.b * right.c + left.d * right.d,
+    tx: left.a * right.tx + left.c * right.ty + left.tx,
+    ty: left.b * right.tx + left.d * right.ty + left.ty
+  };
+}
+
 function canMorphGeometries(
   start: FlashShapePath["geometry"],
   end: FlashShapePath["geometry"]
@@ -1621,7 +2244,9 @@ function interpolateMorphFill(
 
   if (
     startFill.kind !== "solid" &&
+    startFill.kind !== "bitmap" &&
     endFill.kind !== "solid" &&
+    endFill.kind !== "bitmap" &&
     startFill.kind === endFill.kind &&
     canMorphGradientStops(startFill, endFill)
   ) {
@@ -1935,6 +2560,81 @@ function shapeGroupPriority(group: Record<string, unknown>): number {
   }
 
   return 2;
+}
+
+function compareLayerSpecPriority(left: LayerExportSpec, right: LayerExportSpec): number {
+  const leftPriority = layerSpecPriority(left);
+  const rightPriority = layerSpecPriority(right);
+
+  if (leftPriority !== rightPriority) {
+    return leftPriority - rightPriority;
+  }
+
+  return right.index - left.index;
+}
+
+function layerSpecPriority(spec: LayerExportSpec): number {
+  if (spec.kind === "bitmap") {
+    return 1;
+  }
+
+  const items = spec.shapes ?? [];
+  const hasStroke = items.some((group) => {
+    const nested = Array.isArray(group.it) ? group.it as Array<Record<string, unknown>> : [];
+    return nested.some((item) => item.ty === "st");
+  });
+  const hasFill = items.some((group) => {
+    const nested = Array.isArray(group.it) ? group.it as Array<Record<string, unknown>> : [];
+    return nested.some((item) => item.ty === "fl" || item.ty === "gf");
+  });
+
+  if (hasStroke && !hasFill) {
+    return 0;
+  }
+
+  return 2;
+}
+
+function ensureBitmapAsset(
+  symbol: FlashBitmapSymbol,
+  assets: Record<string, unknown>[],
+  assetIds: Map<string, string>
+): string {
+  const existing = assetIds.get(symbol.id);
+  if (existing) {
+    return existing;
+  }
+
+  const assetId = `image:${symbol.id}`;
+  assets.push({
+    id: assetId,
+    w: symbol.width,
+    h: symbol.height,
+    u: "",
+    p: `data:${symbol.mimeType};base64,${encodeBase64(symbol.data)}`,
+    e: 1
+  });
+  assetIds.set(symbol.id, assetId);
+  return assetId;
+}
+
+function encodeBase64(bytes: Uint8Array): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let output = "";
+
+  for (let index = 0; index < bytes.length; index += 3) {
+    const first = bytes[index] ?? 0;
+    const second = bytes[index + 1] ?? 0;
+    const third = bytes[index + 2] ?? 0;
+    const chunk = (first << 16) | (second << 8) | third;
+
+    output += alphabet[(chunk >> 18) & 0x3f];
+    output += alphabet[(chunk >> 12) & 0x3f];
+    output += index + 1 < bytes.length ? alphabet[(chunk >> 6) & 0x3f] : "=";
+    output += index + 2 < bytes.length ? alphabet[chunk & 0x3f] : "=";
+  }
+
+  return output;
 }
 
 function minimumOutPoint(outPoint: number, inPoint = 0): number {

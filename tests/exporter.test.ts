@@ -209,6 +209,49 @@ describe("Lottie export", () => {
     expect(animation?.nm).toBe("swf2lottie");
     expect(animation?.layers?.every((layer) => typeof layer.nm === "string")).toBe(true);
   });
+
+  it("exports bitmap-filled shapes as image layers", () => {
+    const fixtures = loadSwfFixtures(resolve(process.cwd(), "fixtures"));
+    const bitmap = fixtures.find((fixture) => fixture.name === "testswf25-simple-bitmap.swf");
+
+    if (!bitmap) {
+      throw new Error("Bitmap fixture not found.");
+    }
+
+    const result = convertSwfToLottie(bitmap.buffer);
+    const animation = result.animation as {
+      assets?: Array<Record<string, unknown>>;
+      layers?: Array<Record<string, unknown>>;
+    } | null;
+
+    expect(animation).not.toBeNull();
+    expect(animation?.assets?.some((asset) => typeof asset.id === "string" && String(asset.id).startsWith("image:"))).toBe(true);
+    expect(animation?.layers?.some((layer) => layer.ty === 2)).toBe(true);
+  });
+
+  it("exports bitmap motion tweens with animated image layer transforms", () => {
+    const fixtures = loadSwfFixtures(resolve(process.cwd(), "fixtures"));
+    const bitmap = fixtures.find((fixture) => fixture.name === "testswf26-bitmap-motion-tween.swf");
+
+    if (!bitmap) {
+      throw new Error("Bitmap motion fixture not found.");
+    }
+
+    const result = convertSwfToLottie(bitmap.buffer);
+    const animation = result.animation as {
+      layers?: Array<{
+        ty?: number;
+        ks?: {
+          p?: { a?: number; k?: unknown[] };
+        };
+      }>;
+    } | null;
+    const imageLayer = animation?.layers?.find((layer) => layer.ty === 2);
+
+    expect(animation).not.toBeNull();
+    expect(imageLayer).toBeDefined();
+    expect(imageLayer?.ks?.p?.a).toBe(1);
+  });
 });
 
 function findAnimatedFill(node: unknown): { c?: { a?: number } } | null {

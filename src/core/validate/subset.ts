@@ -27,6 +27,10 @@ export function validateDocumentSubset(document: FlashDocument): ConversionIssue
       continue;
     }
 
+    if (symbol.kind !== "movieclip") {
+      continue;
+    }
+
     symbol.timeline.frames.forEach((frame) => {
       frame.displayList.forEach((instance, displayIndex) => {
         validateColorTransform(
@@ -42,7 +46,7 @@ export function validateDocumentSubset(document: FlashDocument): ConversionIssue
 }
 
 function validateFill(fill: FlashFill, issues: ConversionIssue[], path: string): void {
-  if (fill.kind === "solid") {
+  if (fill.kind === "solid" || fill.kind === "bitmap") {
     return;
   }
 

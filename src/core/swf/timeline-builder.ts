@@ -1,5 +1,6 @@
 import type {
   FlashColorTransform,
+  FlashBitmapSymbol,
   FlashDisplayObjectState,
   FlashDocument,
   FlashFrame,
@@ -9,9 +10,12 @@ import type {
   FlashShapeSymbol
 } from "../ir/index.js";
 import type { ConversionIssue } from "../issues.js";
+import { mergeJpegTables } from "./bitmap-decode.js";
 import type { ParsedSwfMovieHeader } from "./types.js";
 import type {
   SwfControlTag,
+  SwfDefineBitmapTag,
+  SwfJpegTablesTag,
   SwfDefineShapeTag,
   SwfDefineSpriteTag,
   SwfPlaceObjectTag,
@@ -38,7 +42,7 @@ export function buildDocumentFromTags(
   issues: ConversionIssue[];
 } {
   const issues: ConversionIssue[] = [];
-  const symbols = new Map<string, FlashShapeSymbol | FlashMorphShapeSymbol | FlashMovieClipSymbol>();
+  const symbols = new Map<string, FlashShapeSymbol | FlashMorphShapeSymbol | FlashBitmapSymbol | FlashMovieClipSymbol>();
 
   collectSymbols(rootTags, symbols);
 
@@ -79,8 +83,10 @@ export function buildDocumentFromTags(
 
 function collectSymbols(
   tags: SwfControlTag[],
-  symbols: Map<string, FlashShapeSymbol | FlashMorphShapeSymbol | FlashMovieClipSymbol>
+  symbols: Map<string, FlashShapeSymbol | FlashMorphShapeSymbol | FlashBitmapSymbol | FlashMovieClipSymbol>
 ): void {
+  let jpegTables: Uint8Array | undefined;
+
   for (const tag of tags) {
     if (isDefineShapeTag(tag)) {
       const symbolId = symbolIdFromCharacterId(tag.characterId);
@@ -103,6 +109,28 @@ function collectSymbols(
           paths: tag.paths
         });
       }
+      continue;
+    }
+
+    if (isDefineBitmapTag(tag)) {
+      const symbolId = symbolIdFromCharacterId(tag.characterId);
+      if (!symbols.has(symbolId)) {
+        const data = tag.code === 6 && jpegTables ? mergeJpegTables(jpegTables, tag.data) : tag.data;
+        symbols.set(symbolId, {
+          kind: "bitmap",
+          id: symbolId,
+          mimeType: tag.mimeType,
+          data,
+          width: tag.width,
+          height: tag.height,
+          ...(tag.hasSeparateAlpha ? { hasSeparateAlpha: true } : {})
+        });
+      }
+      continue;
+    }
+
+    if (isJpegTablesTag(tag)) {
+      jpegTables = tag.data;
       continue;
     }
 
@@ -393,6 +421,14 @@ function isDefineMorphShapeTag(tag: SwfControlTag): tag is Extract<SwfControlTag
 
 function isDefineSpriteTag(tag: SwfControlTag): tag is SwfDefineSpriteTag {
   return tag.code === 39;
+}
+
+function isDefineBitmapTag(tag: SwfControlTag): tag is SwfDefineBitmapTag {
+  return tag.code === 6 || tag.code === 21 || tag.code === 35 || tag.code === 36;
+}
+
+function isJpegTablesTag(tag: SwfControlTag): tag is SwfJpegTablesTag {
+  return tag.code === 8;
 }
 
 function isPlaceObjectTag(tag: SwfControlTag): tag is SwfPlaceObjectTag {
