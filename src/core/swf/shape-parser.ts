@@ -20,6 +20,13 @@ interface MorphShapeTagParseResult {
   paths: FlashMorphShapePath[];
 }
 
+export interface DebugMorphShapeTagParseResult extends MorphShapeTagParseResult {
+  startPaths: FlashShapePath[];
+  endPaths: FlashShapePath[];
+  endPathsWithoutInitialStyles: FlashShapePath[];
+  endPathVariants: Record<string, FlashShapePath[]>;
+}
+
 interface ParsedShapeRecordSegment {
   styleKind: "fill" | "stroke";
   styleKey: string;
@@ -105,14 +112,101 @@ export function parseDefineMorphShapeTag(
     true,
     code,
     "end",
-    {
-      fillStyle1: fillStyles.endValues.length > 0 ? 1 : 0,
-      lineStyle: lineStyles.endValues.some((style) => style) ? 1 : 0
-    }
+    initialMorphStyleSelection(fillStyles.endValues.length, lineStyles.endValues)
   );
 
   return {
     characterId,
+    paths: pairMorphPaths(startEdges.paths, endEdges.paths)
+  };
+}
+
+export function debugParseDefineMorphShapeTag(
+  buffer: ArrayBuffer,
+  code: 46 | 84,
+  bodyOffset: number
+): DebugMorphShapeTagParseResult {
+  const reader = new BinaryReader(buffer);
+  reader.skip(bodyOffset);
+
+  const characterId = reader.readUi16();
+  const startBounds = readRect(buffer, reader.position);
+  reader.skip(startBounds.byteLength);
+  const endBounds = readRect(buffer, reader.position);
+  reader.skip(endBounds.byteLength);
+
+  if (code === 84) {
+    const startEdgeBounds = readRect(buffer, reader.position);
+    reader.skip(startEdgeBounds.byteLength);
+    const endEdgeBounds = readRect(buffer, reader.position);
+    reader.skip(endEdgeBounds.byteLength);
+    reader.readUi8();
+  }
+
+  const endEdgesOffset = reader.readUi32();
+  const morphDataOffset = reader.position;
+  const fillStyles = readMorphFillStyleArray(buffer, reader.position, code);
+  reader.skip(fillStyles.byteLength);
+  const lineStyles = readMorphLineStyleArray(buffer, reader.position, code);
+  reader.skip(lineStyles.byteLength);
+
+  const startEdges = readShapeRecords(
+    buffer,
+    reader.position,
+    fillStyles.startValues,
+    lineStyles.startValues,
+    true,
+    code,
+    "start"
+  );
+  const endEdges = readShapeRecords(
+    buffer,
+    morphDataOffset + endEdgesOffset,
+    fillStyles.endValues,
+    lineStyles.endValues,
+    true,
+    code,
+    "end",
+    initialMorphStyleSelection(fillStyles.endValues.length, lineStyles.endValues)
+  );
+  const endEdgesWithoutInitialStyles = readShapeRecords(
+    buffer,
+    morphDataOffset + endEdgesOffset,
+    fillStyles.endValues,
+    lineStyles.endValues,
+    true,
+    code,
+    "end"
+  );
+  const endPathVariants: Record<string, FlashShapePath[]> = {};
+  for (const fillStyle0 of [0, 1, 2]) {
+    for (const fillStyle1 of [0, 1, 2]) {
+      for (const lineStyle of [0, 1]) {
+        const key = `f0:${fillStyle0}|f1:${fillStyle1}|l:${lineStyle}`;
+        endPathVariants[key] = readShapeRecords(
+          buffer,
+          morphDataOffset + endEdgesOffset,
+          fillStyles.endValues,
+          lineStyles.endValues,
+          true,
+          code,
+          "end",
+          {
+            fillStyle0,
+            fillStyle1,
+            lineStyle
+          }
+        ).paths;
+      }
+    }
+  }
+
+  return {
+    characterId,
+    startPaths: startEdges.paths,
+    endPaths: endEdges.paths,
+    endPathsWithoutInitialStyles: endEdgesWithoutInitialStyles.paths,
+    endPathVariants,
     paths: pairMorphPaths(startEdges.paths, endEdges.paths)
   };
 }
@@ -421,6 +515,7 @@ function buildPathsFromSegments(
     for (const chain of chains) {
       const closed = arePointsEqual(chain[0]?.startX ?? 0, chain[0]?.startY ?? 0, chain.at(-1)?.endX ?? 0, chain.at(-1)?.endY ?? 0);
       paths.push({
+        styleKey: key,
         closed,
         commands: segmentsToCommands(chain),
         geometry: segmentsToGeometry(chainToGeometrySegments(chain), closed),
@@ -947,28 +1042,20 @@ function readMorphLineStyle2(buffer: ArrayBuffer, startOffset: number): {
   if (hasFillFlag) {
     const startFill = readMorphFillStyle(buffer, reader.position, 84);
     return {
-      startValue: startFill.startValue.kind === "solid"
-        ? {
-            kind: "solid",
-            width: twipsToPixels(startWidth),
-            color: startFill.startValue.color,
-            alpha: startFill.startValue.alpha,
-            lineCap: mapLineCap(startCapStyle, noClose ? endCapStyle : startCapStyle),
-            lineJoin: mapLineJoin(joinStyle),
-            ...(miterLimit !== undefined ? { miterLimit } : {})
-          }
-        : null,
-      endValue: startFill.endValue.kind === "solid"
-        ? {
-            kind: "solid",
-            width: twipsToPixels(endWidth),
-            color: startFill.endValue.color,
-            alpha: startFill.endValue.alpha,
-            lineCap: mapLineCap(startCapStyle, noClose ? endCapStyle : startCapStyle),
-            lineJoin: mapLineJoin(joinStyle),
-            ...(miterLimit !== undefined ? { miterLimit } : {})
-          }
-        : null,
+      startValue: morphFillToStroke(
+        startFill.startValue,
+        twipsToPixels(startWidth),
+        mapLineCap(startCapStyle, noClose ? endCapStyle : startCapStyle),
+        mapLineJoin(joinStyle),
+        miterLimit
+      ),
+      endValue: morphFillToStroke(
+        startFill.endValue,
+        twipsToPixels(endWidth),
+        mapLineCap(startCapStyle, noClose ? endCapStyle : startCapStyle),
+        mapLineJoin(joinStyle),
+        miterLimit
+      ),
       byteLength: 6 + startFill.byteLength + (miterLimit !== undefined ? 2 : 0)
     };
   }
@@ -1042,17 +1129,13 @@ function readLineStyle2(buffer: ArrayBuffer, startOffset: number): {
   if (hasFillFlag) {
     const fillStyle = readFillStyle(buffer, reader.position, 83);
     return {
-      value: fillStyle.value.kind === "solid"
-        ? {
-            kind: "solid",
-            width: twipsToPixels(width),
-            color: fillStyle.value.color,
-            alpha: fillStyle.value.alpha,
-            lineCap: mapLineCap(startCapStyle, noClose ? endCapStyle : startCapStyle),
-            lineJoin: mapLineJoin(joinStyle),
-            ...(miterLimit !== undefined ? { miterLimit } : {})
-          }
-        : null,
+      value: fillToStroke(
+        fillStyle.value,
+        twipsToPixels(width),
+        mapLineCap(startCapStyle, noClose ? endCapStyle : startCapStyle),
+        mapLineJoin(joinStyle),
+        miterLimit
+      ),
       byteLength: 4 + fillStyle.byteLength + (miterLimit !== undefined ? 2 : 0)
     };
   }
@@ -1090,6 +1173,61 @@ function readRect(buffer: ArrayBuffer, startOffset: number): {
     value,
     byteLength: bits.offset - startOffset
   };
+}
+
+function fillToStroke(
+  fill: FlashFill,
+  width: number,
+  lineCap: "butt" | "round" | "square",
+  lineJoin: "miter" | "round" | "bevel",
+  miterLimit?: number
+): FlashStroke | null {
+  if (fill.kind === "solid") {
+    return {
+      kind: "solid",
+      width,
+      color: fill.color,
+      alpha: fill.alpha,
+      lineCap,
+      lineJoin,
+      ...(miterLimit !== undefined ? { miterLimit } : {})
+    };
+  }
+
+  if (fill.kind === "bitmap") {
+    return {
+      kind: "bitmap",
+      width,
+      bitmapId: fill.bitmapId,
+      matrix: fill.matrix,
+      repeat: fill.repeat,
+      smoothed: fill.smoothed,
+      lineCap,
+      lineJoin,
+      ...(miterLimit !== undefined ? { miterLimit } : {})
+    };
+  }
+
+  return {
+    kind: fill.kind,
+    width,
+    matrix: fill.matrix,
+    stops: fill.stops,
+    ...(fill.focalPoint !== undefined ? { focalPoint: fill.focalPoint } : {}),
+    lineCap,
+    lineJoin,
+    ...(miterLimit !== undefined ? { miterLimit } : {})
+  };
+}
+
+function morphFillToStroke(
+  fill: FlashFill,
+  width: number,
+  lineCap: "butt" | "round" | "square",
+  lineJoin: "miter" | "round" | "bevel",
+  miterLimit?: number
+): FlashStroke | null {
+  return fillToStroke(fill, width, lineCap, lineJoin, miterLimit);
 }
 
 function readMatrix(buffer: ArrayBuffer, startOffset: number): {
@@ -1202,23 +1340,11 @@ function mapLineJoin(joinStyle: number): "miter" | "round" | "bevel" {
 }
 
 function pairMorphPaths(startPaths: FlashShapePath[], endPaths: FlashShapePath[]): FlashMorphShapePath[] {
-  const endFillPaths = endPaths.filter((path) => path.fill);
-  const endStrokePaths = endPaths.filter((path) => path.stroke && !path.fill);
-  const fallbackEndPaths = [...endPaths];
+  const remainingEndPaths = [...endPaths];
   const pairs: FlashMorphShapePath[] = [];
 
   for (const startPath of startPaths) {
-    let endPath: FlashShapePath | undefined;
-
-    if (startPath.fill) {
-      endPath = endFillPaths.shift();
-    } else if (startPath.stroke) {
-      endPath = endStrokePaths.shift();
-    }
-
-    if (!endPath) {
-      endPath = fallbackEndPaths.shift();
-    }
+    const endPath = takeBestMorphMatch(startPath, remainingEndPaths);
 
     if (!endPath) {
       continue;
@@ -1231,4 +1357,70 @@ function pairMorphPaths(startPaths: FlashShapePath[], endPaths: FlashShapePath[]
   }
 
   return pairs;
+}
+
+function takeBestMorphMatch(startPath: FlashShapePath, remainingEndPaths: FlashShapePath[]): FlashShapePath | undefined {
+  let bestIndex = -1;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const [index, endPath] of remainingEndPaths.entries()) {
+    const score = morphPathMatchScore(startPath, endPath);
+    if (score < bestScore) {
+      bestScore = score;
+      bestIndex = index;
+    }
+  }
+
+  if (bestIndex === -1) {
+    return undefined;
+  }
+
+  const [best] = remainingEndPaths.splice(bestIndex, 1);
+  return best;
+}
+
+function morphPathMatchScore(startPath: FlashShapePath, endPath: FlashShapePath): number {
+  let score = 0;
+
+  if (startPath.styleKey && endPath.styleKey) {
+    score += startPath.styleKey === endPath.styleKey ? -5000 : 5000;
+  }
+
+  if (startPath.fill && endPath.fill) {
+    score += startPath.fill.kind === endPath.fill.kind ? 0 : 1000;
+  } else if (startPath.fill || endPath.fill) {
+    score += 2000;
+  }
+
+  if (startPath.stroke && endPath.stroke) {
+    score += startPath.stroke.kind === endPath.stroke.kind ? 0 : 1000;
+  } else if (startPath.stroke || endPath.stroke) {
+    score += 2000;
+  }
+
+  score += Math.abs(startPath.geometry.vertices.length - endPath.geometry.vertices.length) * 10;
+
+  const startFirst = startPath.geometry.vertices[0];
+  const endFirst = endPath.geometry.vertices[0];
+  if (startFirst && endFirst) {
+    const dx = startFirst[0] - endFirst[0];
+    const dy = startFirst[1] - endFirst[1];
+    score += dx * dx + dy * dy;
+  }
+
+  return score;
+}
+
+function initialMorphStyleSelection(
+  fillStyleCount: number,
+  lineStyles: Array<FlashStroke | null>
+): {
+  fillStyle0?: number;
+  fillStyle1?: number;
+  lineStyle?: number;
+} {
+  return {
+    ...(fillStyleCount > 1 ? { fillStyle0: 1, fillStyle1: 2 } : fillStyleCount > 0 ? { fillStyle1: 1 } : {}),
+    ...(lineStyles.some((style) => style) ? { lineStyle: 1 } : {})
+  };
 }

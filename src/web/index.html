@@ -25,20 +25,27 @@
               <div id="preview" class="preview-surface" aria-label="Lottie preview"></div>
             </div>
             <div class="preview-toolbar">
-              <div class="toolbar-left">
-                <span id="frame-readout" class="frame-readout">Frame 0</span>
-                <div class="toolbar-buttons">
-                  <button id="first-frame" type="button" aria-label="Go to start">|&lt;</button>
-                  <button id="prev-frame" type="button" aria-label="Previous frame">&lt;</button>
-                  <button id="toolbar-play" type="button" aria-label="Toggle playback">Play</button>
-                  <button id="next-frame" type="button" aria-label="Next frame">&gt;</button>
+              <div class="toolbar-track-row">
+                <input id="frame-input" class="frame-input" type="number" min="1" step="1" value="1" aria-label="Current frame" />
+                <div class="toolbar-track">
+                  <input id="frame-slider" type="range" min="0" max="0" step="1" value="0" aria-label="Frame timeline" />
                 </div>
               </div>
-              <div class="toolbar-buttons">
-                <button id="zoom-out" type="button" aria-label="Zoom out">Zoom out</button>
-                <button id="zoom-reset" type="button" aria-label="Reset zoom">100%</button>
-                <button id="zoom-in" type="button" aria-label="Zoom in">Zoom in</button>
-                <button id="zoom-fit" type="button" aria-label="Fit preview">Fit</button>
+              <div class="toolbar-row">
+                <div class="toolbar-left">
+                  <div class="toolbar-buttons">
+                    <button id="first-frame" type="button" aria-label="Go to start">|&lt;</button>
+                    <button id="prev-frame" type="button" aria-label="Previous frame">&lt;</button>
+                    <button id="toolbar-play" type="button" aria-label="Toggle playback">Play</button>
+                    <button id="next-frame" type="button" aria-label="Next frame">&gt;</button>
+                  </div>
+                </div>
+                <div class="toolbar-buttons">
+                  <button id="zoom-out" type="button" aria-label="Zoom out">Zoom out</button>
+                  <button id="zoom-reset" type="button" aria-label="Reset zoom">100%</button>
+                  <button id="zoom-in" type="button" aria-label="Zoom in">Zoom in</button>
+                  <button id="zoom-fit" type="button" aria-label="Fit preview">Fit</button>
+                </div>
               </div>
             </div>
           </div>

@@ -7,11 +7,12 @@ const toolbarPlay = document.getElementById("toolbar-play");
 const firstFrameButton = document.getElementById("first-frame");
 const prevFrameButton = document.getElementById("prev-frame");
 const nextFrameButton = document.getElementById("next-frame");
+const frameSlider = document.getElementById("frame-slider");
+const frameInput = document.getElementById("frame-input");
 const zoomInButton = document.getElementById("zoom-in");
 const zoomOutButton = document.getElementById("zoom-out");
 const zoomFitButton = document.getElementById("zoom-fit");
 const zoomResetButton = document.getElementById("zoom-reset");
-const frameReadout = document.getElementById("frame-readout");
 const summary = document.getElementById("summary");
 const issueCounts = document.getElementById("issue-counts");
 const toggleOutput = document.getElementById("toggle-output");
@@ -99,6 +100,18 @@ toolbarPlay.addEventListener("click", togglePlayback);
 firstFrameButton.addEventListener("click", () => goToFrame(0));
 prevFrameButton.addEventListener("click", () => goToFrame(Math.max(0, currentFrame - 1)));
 nextFrameButton.addEventListener("click", () => goToFrame(currentFrame + 1));
+frameSlider.addEventListener("input", () => goToFrame(Number(frameSlider.value)));
+frameInput.addEventListener("change", applyFrameInput);
+frameInput.addEventListener("input", () => {
+  if (document.activeElement === frameInput && frameInput.value !== "") {
+    applyFrameInput();
+  }
+});
+frameInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    applyFrameInput();
+  }
+});
 zoomInButton.addEventListener("click", () => setZoom(currentZoom + 0.25));
 zoomOutButton.addEventListener("click", () => setZoom(Math.max(0.5, currentZoom - 0.25)));
 zoomFitButton.addEventListener("click", fitZoom);
@@ -141,7 +154,12 @@ function clearWorkspace() {
   savedOutput.textContent = "";
   summary.textContent = "No converted file selected.";
   issueCounts.textContent = "0 warnings, 0 errors";
-  frameReadout.textContent = "Frame 0";
+  frameSlider.min = "0";
+  frameSlider.max = "0";
+  frameSlider.value = "0";
+  frameInput.min = "1";
+  frameInput.max = "1";
+  frameInput.value = "1";
   previewStage.style.width = "";
   previewStage.style.height = "";
   preview.style.width = "";
@@ -165,6 +183,7 @@ function renderWorkspace() {
   savedOutput.hidden = true;
   renderSummary();
   updateStageSize();
+  syncFrameSlider();
   renderPreviewAnimation();
 }
 
@@ -278,8 +297,43 @@ function goToFrame(frame) {
 
 function updatePlaybackUi() {
   const frameNumber = currentFrame + 1;
-  frameReadout.textContent = `Frame ${frameNumber}`;
+  frameSlider.value = String(currentFrame);
+  frameInput.value = String(frameNumber);
   toolbarPlay.textContent = isPlaying ? "Pause" : "Play";
+}
+
+function syncFrameSlider() {
+  if (!currentWorkingAnimation) {
+    frameSlider.min = "0";
+    frameSlider.max = "0";
+    frameSlider.value = "0";
+    frameInput.min = "1";
+    frameInput.max = "1";
+    frameInput.value = "1";
+    return;
+  }
+
+  const maxFrame = Math.max(0, Math.round(currentWorkingAnimation.op - currentWorkingAnimation.ip - 1));
+  frameSlider.min = "0";
+  frameSlider.max = String(maxFrame);
+  frameSlider.value = String(Math.min(currentFrame, maxFrame));
+  frameInput.min = "1";
+  frameInput.max = String(maxFrame + 1);
+  frameInput.value = String(Math.min(currentFrame, maxFrame) + 1);
+}
+
+function applyFrameInput() {
+  if (!currentWorkingAnimation) {
+    return;
+  }
+
+  const requestedFrame = Number.parseInt(frameInput.value, 10);
+  if (!Number.isFinite(requestedFrame)) {
+    frameInput.value = String(currentFrame + 1);
+    return;
+  }
+
+  goToFrame(requestedFrame - 1);
 }
 
 function setZoom(nextZoom) {
@@ -339,6 +393,7 @@ function applyPreviewEdits() {
   outputJson.textContent = JSON.stringify(currentWorkingAnimation, null, 2);
   renderSummary();
   updateStageSize();
+  syncFrameSlider();
   renderPreviewAnimation();
 }
 

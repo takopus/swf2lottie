@@ -57,7 +57,30 @@ export interface FlashSolidStroke {
   miterLimit?: number;
 }
 
-export type FlashStroke = FlashSolidStroke;
+export interface FlashGradientStroke {
+  kind: "linear-gradient" | "radial-gradient";
+  width: number;
+  matrix: FlashMatrix;
+  stops: FlashGradientStop[];
+  focalPoint?: number;
+  lineCap?: "butt" | "round" | "square";
+  lineJoin?: "miter" | "round" | "bevel";
+  miterLimit?: number;
+}
+
+export interface FlashBitmapStroke {
+  kind: "bitmap";
+  width: number;
+  bitmapId: string;
+  matrix: FlashMatrix;
+  repeat: boolean;
+  smoothed: boolean;
+  lineCap?: "butt" | "round" | "square";
+  lineJoin?: "miter" | "round" | "bevel";
+  miterLimit?: number;
+}
+
+export type FlashStroke = FlashSolidStroke | FlashGradientStroke | FlashBitmapStroke;
 
 export interface FlashShapeGeometry {
   vertices: [number, number][];
@@ -67,6 +90,7 @@ export interface FlashShapeGeometry {
 }
 
 export interface FlashShapePath {
+  styleKey?: string;
   closed: boolean;
   commands: string[];
   geometry: FlashShapeGeometry;

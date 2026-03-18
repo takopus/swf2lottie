@@ -4,6 +4,7 @@ import type {
   FlashDisplayObjectState,
   FlashDocument,
   FlashGradientFill,
+  FlashGradientStroke,
   FlashMorphShapePath,
   FlashMovieClipSymbol,
   FlashShapePath,
@@ -64,6 +65,13 @@ interface ShapeStyleGroup {
   fill?: FlashShapePath["fill"];
   stroke?: FlashShapePath["stroke"];
   paths: FlashShapePath[];
+}
+
+interface MorphShapeStyleGroup {
+  index: number;
+  fillPath?: FlashMorphShapePath;
+  strokePath?: FlashMorphShapePath;
+  paths: FlashMorphShapePath[];
 }
 
 interface LayerExportSpec {
@@ -242,6 +250,23 @@ function exportTrack(
     return [];
   }
 
+  const splitTracks = splitTrackBySymbolChanges(track);
+  if (splitTracks.length > 1) {
+    return splitTracks.flatMap((splitTrack) => exportTrack(
+      splitTrack,
+      trackMap,
+      timeline,
+      document,
+      symbolMap,
+      bitmapAssets,
+      exportedBitmapAssets,
+      bitmapAssetIds,
+      issues,
+      bitmapAssetMode,
+      bitmapAssetBasePath
+    ));
+  }
+
   const symbol = symbolMap.get(track.symbolId);
 
   if (!symbol) {
@@ -370,9 +395,132 @@ function exportTrack(
   }
 
   if (symbol.kind === "morphshape") {
-    const shapes = sortShapeGroups(
-      symbol.paths.flatMap((path) => exportMorphShapePath(path, track.samples, issues))
-    );
+    const proxySolidFillLayer = exportMorphProxySolidFillLayer(track, timeline, symbol, baseLayer, transformSamples, shouldBakeLayerTransform, symbolMap);
+    if (proxySolidFillLayer) {
+      return [
+        {
+          ...proxySolidFillLayer,
+          ...(maskProperties.length > 0 ? { hasMask: true, masksProperties: maskProperties } : {})
+        }
+      ];
+    }
+
+    const staticProxySuccessor = findStaticMorphSuccessorShape(track, timeline, symbolMap);
+    if (
+      staticProxySuccessor &&
+      morphStylesAreStatic(symbol) &&
+      symbol.paths.some((path) => path.start.stroke || path.end.stroke)
+    ) {
+      const shapes = sortShapeGroups(
+        exportStaticMorphProxyShapes(
+          symbol,
+          staticProxySuccessor.paths,
+          issues,
+          transformSamples,
+          shouldBakeLayerTransform ? track.samples : undefined,
+          track.samples,
+          hasImmediateStaticMorphSuccessor(track, timeline, staticProxySuccessor.id)
+        )
+      );
+      if (shapes.length > 0) {
+        const layerTransformSamples = shouldBakeLayerTransform
+          ? transformSamples.map((sample) => ({
+              ...sample,
+              position: [0, 0, 0] as [number, number, number],
+              rotation: 0,
+              scale: [100, 100, 100] as [number, number, number],
+              skew: 0,
+              skewAxis: 0
+            }))
+          : transformSamples;
+
+        return [
+          {
+            ...baseLayer,
+            ks: exportTransformSamples(layerTransformSamples),
+            ty: 4,
+            shapes,
+            ...(maskProperties.length > 0 ? { hasMask: true, masksProperties: maskProperties } : {})
+          }
+        ];
+      }
+    }
+
+    const staticSolidSuccessor = findStaticMorphSuccessorShape(track, timeline, symbolMap);
+    if (staticSolidSuccessor && shapeUsesOnlySolidStyles(staticSolidSuccessor)) {
+      const shapes = sortShapeGroups(
+        exportStaticMorphProxyShapes(
+          symbol,
+          staticSolidSuccessor.paths,
+          issues,
+          transformSamples,
+          shouldBakeLayerTransform ? track.samples : undefined,
+          track.samples,
+          hasImmediateStaticMorphSuccessor(track, timeline, staticSolidSuccessor.id)
+        )
+      );
+      if (shapes.length > 0) {
+        const layerTransformSamples = shouldBakeLayerTransform
+          ? transformSamples.map((sample) => ({
+              ...sample,
+              position: [0, 0, 0] as [number, number, number],
+              rotation: 0,
+              scale: [100, 100, 100] as [number, number, number],
+              skew: 0,
+              skewAxis: 0
+            }))
+          : transformSamples;
+
+        return [
+          {
+            ...baseLayer,
+            ks: exportTransformSamples(layerTransformSamples),
+            ty: 4,
+            shapes,
+            ...(maskProperties.length > 0 ? { hasMask: true, masksProperties: maskProperties } : {})
+          }
+        ];
+      }
+    }
+
+    const staticProxyShape = findStaticMorphProxyShape(track, timeline, symbol, symbolMap);
+    if (staticProxyShape) {
+      const shapes = sortShapeGroups(
+        exportStaticMorphProxyShapes(
+          symbol,
+          staticProxyShape.paths,
+          issues,
+          transformSamples,
+          shouldBakeLayerTransform ? track.samples : undefined,
+          track.samples,
+          false
+        )
+      );
+      if (shapes.length > 0) {
+        const layerTransformSamples = shouldBakeLayerTransform
+          ? transformSamples.map((sample) => ({
+              ...sample,
+              position: [0, 0, 0] as [number, number, number],
+              rotation: 0,
+              scale: [100, 100, 100] as [number, number, number],
+              skew: 0,
+              skewAxis: 0
+            }))
+          : transformSamples;
+
+        return [
+          {
+            ...baseLayer,
+            ks: exportTransformSamples(layerTransformSamples),
+            ty: 4,
+            shapes,
+            ...(maskProperties.length > 0 ? { hasMask: true, masksProperties: maskProperties } : {})
+          }
+        ];
+      }
+    }
+
+    const shapes = sortShapeGroups(exportMorphShapePaths(symbol.paths, track.samples, issues));
     if (shapes.length === 0) {
       return [];
     }
@@ -424,6 +572,363 @@ function exportTrack(
       shapes: layer.shapes
     })
   );
+}
+
+function exportMorphProxySolidFillLayer(
+  track: TimelineTrack,
+  timeline: FlashTimeline,
+  symbol: Extract<FlashDocument["symbols"][number], { kind: "morphshape" }>,
+  baseLayer: Record<string, unknown>,
+  transformSamples: TransformSample[],
+  shouldBakeLayerTransform: boolean,
+  symbolMap: FlashSymbolMap
+): Record<string, unknown> | null {
+  const successor = findStaticMorphProxyShape(track, timeline, symbol, symbolMap);
+  if (!successor) {
+    return null;
+  }
+
+  const morphSolidFillPaths = symbol.paths.filter((path) => path.start.fill?.kind === "solid" && path.end.fill?.kind === "solid");
+  const successorSolidFillPaths = successor.paths.filter((path) => path.fill?.kind === "solid");
+
+  if (morphSolidFillPaths.length !== 1 || successorSolidFillPaths.length !== 1) {
+    return null;
+  }
+
+  const morphFillPath = morphSolidFillPaths[0];
+  const successorFillPath = successorSolidFillPaths[0];
+  const startFill = morphFillPath?.start.fill?.kind === "solid" ? morphFillPath.start.fill : null;
+  const endFill = morphFillPath?.end.fill?.kind === "solid" ? morphFillPath.end.fill : null;
+  const successorFill = successorFillPath?.fill?.kind === "solid" ? successorFillPath.fill : null;
+  if (!morphFillPath || !successorFillPath || !startFill || !endFill || !successorFill) {
+    return null;
+  }
+
+  const shapeItems: Record<string, unknown>[] = [
+    exportLottieBezier(successorFillPath),
+    {
+      ty: "fl",
+      c: exportVectorProperty(track.samples
+        .map((sample, frame) => sample
+          ? {
+              frame,
+              value: interpolateColorVector(
+                startFill.color,
+                endFill.color,
+                sample.ratio ?? 0
+              )
+            }
+          : null)
+        .filter((value): value is { frame: number; value: [number, number, number, number] } => value !== null)),
+      o: exportScalarProperty(track.samples
+        .map((sample, frame) => sample
+          ? {
+              frame,
+              value: clamp(interpolateNumber(
+                startFill.alpha,
+                endFill.alpha,
+                sample.ratio ?? 0
+              ) * 100, 0, 100)
+            }
+          : null)
+        .filter((value): value is { frame: number; value: number } => value !== null)),
+      r: 1
+    },
+    exportGroupTransform()
+  ];
+
+  const layerTransformSamples = shouldBakeLayerTransform
+    ? transformSamples.map((sample) => ({
+        ...sample,
+        position: [0, 0, 0] as [number, number, number],
+        rotation: 0,
+        scale: [100, 100, 100] as [number, number, number],
+        skew: 0,
+        skewAxis: 0
+      }))
+    : transformSamples;
+
+  return {
+    ...baseLayer,
+    ks: exportTransformSamples(layerTransformSamples),
+    ty: 4,
+    shapes: [
+      {
+        ty: "gr",
+        it: shapeItems
+      }
+    ]
+  };
+}
+
+function findStaticMorphProxyShape(
+  track: TimelineTrack,
+  timeline: FlashTimeline,
+  symbol: Extract<FlashDocument["symbols"][number], { kind: "morphshape" }>,
+  symbolMap: FlashSymbolMap
+): FlashShapeSymbol | null {
+  if (!morphHasProxySolidFills(symbol)) {
+    return null;
+  }
+
+  const currentSample = track.samples[track.lastFrame];
+  if (!currentSample) {
+    return null;
+  }
+
+  const successorSymbol = findStaticMorphSuccessorShape(track, timeline, symbolMap);
+  if (!successorSymbol) {
+    return null;
+  }
+
+  return shapeHasCompatibleStaticMorphGeometry(successorSymbol, symbol) ? successorSymbol : null;
+}
+
+function shapeUsesOnlySolidStyles(shape: FlashShapeSymbol): boolean {
+  return shape.paths.every((path) =>
+    (!path.fill || path.fill.kind === "solid") &&
+    (!path.stroke || path.stroke.kind === "solid")
+  );
+}
+
+function findStaticMorphSuccessorShape(
+  track: TimelineTrack,
+  timeline: FlashTimeline,
+  symbolMap: FlashSymbolMap
+): FlashShapeSymbol | null {
+  const currentSample = track.samples[track.lastFrame];
+  if (!currentSample) {
+    return null;
+  }
+
+  for (let frameIndex = track.lastFrame + 1; frameIndex < timeline.frames.length; frameIndex += 1) {
+    const frame = timeline.frames[frameIndex];
+    const successor = frame?.displayList.find((instance) => instance.depth === currentSample.depth);
+    if (!successor) {
+      continue;
+    }
+
+    const successorSymbol = symbolMap.get(successor.symbolId);
+    if (!successorSymbol) {
+      return null;
+    }
+
+    if (successorSymbol.kind === "morphshape") {
+      continue;
+    }
+
+    if (successorSymbol.kind !== "shape") {
+      return null;
+    }
+
+    return successorSymbol;
+  }
+
+  for (let frameIndex = track.lastFrame + 1; frameIndex < timeline.frames.length; frameIndex += 1) {
+    const frame = timeline.frames[frameIndex];
+    if (!frame || frame.displayList.length === 0) {
+      continue;
+    }
+
+    const shapeSymbols = frame.displayList
+      .map((instance) => symbolMap.get(instance.symbolId))
+      .filter((symbol): symbol is FlashShapeSymbol => symbol?.kind === "shape");
+
+    if (shapeSymbols.length === 1) {
+      return shapeSymbols[0] ?? null;
+    }
+
+    if (shapeSymbols.length > 1) {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function morphHasProxySolidFills(
+  symbol: Extract<FlashDocument["symbols"][number], { kind: "morphshape" }>
+): boolean {
+  const fillPaths = symbol.paths.filter((path) => path.start.fill || path.end.fill);
+  return fillPaths.length > 0 && fillPaths.every((path) =>
+    path.start.fill?.kind === "solid" &&
+    path.end.fill?.kind === "solid"
+  );
+}
+
+function morphStylesAreStatic(
+  symbol: Extract<FlashDocument["symbols"][number], { kind: "morphshape" }>
+): boolean {
+  return symbol.paths.every((path) => {
+    const fillStable = fillsEqual(path.start.fill, path.end.fill);
+    const strokeStable = strokesEqual(path.start.stroke, path.end.stroke);
+    return fillStable && strokeStable;
+  });
+}
+
+function fillsEqual(left: FlashShapePath["fill"], right: FlashShapePath["fill"]): boolean {
+  if (!left && !right) {
+    return true;
+  }
+
+  if (!left || !right || left.kind !== right.kind) {
+    return false;
+  }
+
+  if (left.kind === "solid" && right.kind === "solid") {
+    return left.color === right.color && approximatelyEqual(left.alpha, right.alpha);
+  }
+
+  if ((left.kind === "linear-gradient" || left.kind === "radial-gradient") &&
+      (right.kind === "linear-gradient" || right.kind === "radial-gradient")) {
+    return left.kind === right.kind &&
+      gradientStopsEqual(left.stops, right.stops) &&
+      matrixEqual(left.matrix, right.matrix) &&
+      approximatelyEqual(left.focalPoint ?? 0, right.focalPoint ?? 0);
+  }
+
+  if (left.kind === "bitmap" && right.kind === "bitmap") {
+    return left.bitmapId === right.bitmapId &&
+      left.repeat === right.repeat &&
+      left.smoothed === right.smoothed &&
+      matrixEqual(left.matrix, right.matrix);
+  }
+
+  return false;
+}
+
+function strokesEqual(left: FlashShapePath["stroke"], right: FlashShapePath["stroke"]): boolean {
+  if (!left && !right) {
+    return true;
+  }
+
+  if (!left || !right || left.kind !== right.kind) {
+    return false;
+  }
+
+  if (left.kind === "solid" && right.kind === "solid") {
+    return left.color === right.color &&
+      approximatelyEqual(left.alpha, right.alpha) &&
+      approximatelyEqual(left.width, right.width) &&
+      left.lineCap === right.lineCap &&
+      left.lineJoin === right.lineJoin &&
+      approximatelyEqual(left.miterLimit ?? 3, right.miterLimit ?? 3);
+  }
+
+  if ((left.kind === "linear-gradient" || left.kind === "radial-gradient") &&
+      (right.kind === "linear-gradient" || right.kind === "radial-gradient")) {
+    return left.kind === right.kind &&
+      approximatelyEqual(left.width, right.width) &&
+      left.lineCap === right.lineCap &&
+      left.lineJoin === right.lineJoin &&
+      approximatelyEqual(left.miterLimit ?? 3, right.miterLimit ?? 3) &&
+      gradientStopsEqual(left.stops, right.stops) &&
+      matrixEqual(left.matrix, right.matrix) &&
+      approximatelyEqual(left.focalPoint ?? 0, right.focalPoint ?? 0);
+  }
+
+  if (left.kind === "bitmap" && right.kind === "bitmap") {
+    return left.bitmapId === right.bitmapId &&
+      left.repeat === right.repeat &&
+      left.smoothed === right.smoothed &&
+      approximatelyEqual(left.width, right.width) &&
+      left.lineCap === right.lineCap &&
+      left.lineJoin === right.lineJoin &&
+      approximatelyEqual(left.miterLimit ?? 3, right.miterLimit ?? 3) &&
+      matrixEqual(left.matrix, right.matrix);
+  }
+
+  return false;
+}
+
+function gradientStopsEqual(
+  left: Array<{ offset: number; color: string; alpha: number }>,
+  right: Array<{ offset: number; color: string; alpha: number }>
+): boolean {
+  return left.length === right.length && left.every((stop, index) => {
+    const other = right[index];
+    return other &&
+      approximatelyEqual(stop.offset, other.offset) &&
+      stop.color === other.color &&
+      approximatelyEqual(stop.alpha, other.alpha);
+  });
+}
+
+function matrixEqual(
+  left: { a: number; b: number; c: number; d: number; tx: number; ty: number },
+  right: { a: number; b: number; c: number; d: number; tx: number; ty: number }
+): boolean {
+  return approximatelyEqual(left.a, right.a) &&
+    approximatelyEqual(left.b, right.b) &&
+    approximatelyEqual(left.c, right.c) &&
+    approximatelyEqual(left.d, right.d) &&
+    approximatelyEqual(left.tx, right.tx) &&
+    approximatelyEqual(left.ty, right.ty);
+}
+
+function shapeHasCompatibleStaticMorphGeometry(
+  shape: FlashShapeSymbol,
+  morph: Extract<FlashDocument["symbols"][number], { kind: "morphshape" }>
+): boolean {
+  if (shape.paths.some((path) => path.fill && path.fill.kind !== "solid")) {
+    return false;
+  }
+
+  const shapeSolidGroups = groupPathsByStyle(shape.paths.filter((path) => path.fill?.kind === "solid"));
+  const morphSolidGroups = groupMorphPathsByStyle(morph.paths.filter((path) => path.start.fill?.kind === "solid"));
+
+  return shapeSolidGroups.length > 0 && shapeSolidGroups.length >= morphSolidGroups.length;
+}
+
+function splitTrackBySymbolChanges(track: TimelineTrack): TimelineTrack[] {
+  const segments: TimelineTrack[] = [];
+  let segmentStart = -1;
+  let segmentSymbolId: string | null = null;
+  let segmentIndex = 0;
+
+  const flush = (endIndex: number): void => {
+    if (segmentStart === -1 || !segmentSymbolId) {
+      return;
+    }
+
+    const samples = Array.from({ length: track.samples.length }, (_, index) =>
+      index >= segmentStart && index <= endIndex ? (track.samples[index] ?? null) : null
+    );
+    segments.push({
+      ...track,
+      id: `${track.id}:segment:${segmentIndex}`,
+      symbolId: segmentSymbolId,
+      firstFrame: segmentStart,
+      lastFrame: endIndex,
+      samples
+    });
+    segmentIndex += 1;
+    segmentStart = -1;
+    segmentSymbolId = null;
+  };
+
+  for (let frameIndex = 0; frameIndex < track.samples.length; frameIndex += 1) {
+    const sample = track.samples[frameIndex];
+    if (!sample) {
+      flush(frameIndex - 1);
+      continue;
+    }
+
+    if (segmentStart === -1) {
+      segmentStart = frameIndex;
+      segmentSymbolId = sample.symbolId;
+      continue;
+    }
+
+    if (sample.symbolId !== segmentSymbolId) {
+      flush(frameIndex - 1);
+      segmentStart = frameIndex;
+      segmentSymbolId = sample.symbolId;
+    }
+  }
+
+  flush(track.samples.length - 1);
+  return segments.length === 0 ? [track] : segments;
 }
 
 function buildTimelineTracks(timeline: FlashTimeline): TimelineTrack[] {
@@ -543,6 +1048,17 @@ function exportShapePaths(
 
     if (group.stroke?.kind === "solid") {
       items.push(exportSolidStroke(group.stroke));
+    } else if (group.stroke?.kind === "linear-gradient") {
+      items.push(exportLinearGradientStroke(group.stroke, transformSamples, sourceSamples));
+    } else if (group.stroke?.kind === "radial-gradient") {
+      items.push(exportRadialGradientStroke(group.stroke, transformSamples, sourceSamples));
+    } else if (group.stroke?.kind === "bitmap") {
+      issues.push({
+        code: "unsupported_feature",
+        severity: "warning",
+        message: "Bitmap strokes are not supported by the current Lottie exporter.",
+        details: { bitmapId: group.stroke.bitmapId }
+      });
     }
 
     if (items.length === group.paths.length) {
@@ -561,6 +1077,259 @@ function exportShapePaths(
   }
 
   return exported;
+}
+
+function exportStaticMorphProxyShapes(
+  symbol: Extract<FlashDocument["symbols"][number], { kind: "morphshape" }>,
+  successorPaths: FlashShapePath[],
+  issues: ConversionIssue[],
+  transformSamples: TransformSample[] = [],
+  sourceSamples?: Array<FlashDisplayObjectState | null>,
+  morphSamples: Array<FlashDisplayObjectState | null> = [],
+  animateTowardSuccessor = false
+): Record<string, unknown>[] {
+  const exported: Record<string, unknown>[] = [];
+  const morphFillPaths = symbol.paths.filter((path) => path.start.fill && !path.start.stroke);
+  const morphStrokePaths = symbol.paths.filter((path) => path.start.stroke && !path.start.fill);
+  const morphFillGroups = groupMorphPathsByStyle(morphFillPaths);
+  const morphStrokeGroups = groupMorphPathsByStyle(morphStrokePaths);
+
+  for (const group of groupPathsByStyle(successorPaths)) {
+    const matchedMorphFillGroup = group.fill
+      ? findBestMatchingMorphGroupForProxy(group, morphFillGroups)
+      : null;
+    const matchedMorphStrokeGroup = group.stroke
+      ? findBestMatchingMorphGroupForProxy(group, morphStrokeGroups)
+      : null;
+
+    if ((group.fill && !matchedMorphFillGroup) || (group.stroke && !matchedMorphStrokeGroup)) {
+      continue;
+    }
+
+    const items: Record<string, unknown>[] = group.paths.map((path) =>
+      sourceSamples && needsBakedMatrix(sourceSamples)
+        ? bakePathAnimation(path, sourceSamples)
+        : exportLottieBezier(path)
+    );
+
+      const representativePath = group.paths[0];
+      if (!representativePath) {
+        continue;
+      }
+
+    if (group.fill) {
+      const matchedMorphFill = matchedMorphFillGroup?.fillPath ?? findBestMatchingMorphPathByGeometry(representativePath, morphFillPaths);
+      const fill = matchedMorphFill?.start.fill ?? group.fill;
+      const matchedSolidFill = matchedMorphFill?.start.fill?.kind === "solid" ? matchedMorphFill.start.fill : null;
+      const matchedSolidEndFill = matchedMorphFill?.end.fill?.kind === "solid" ? matchedMorphFill.end.fill : null;
+      const successorSolidFill = group.fill.kind === "solid" ? group.fill : null;
+
+      if (fill.kind === "solid") {
+        if (
+          matchedSolidFill &&
+          matchedSolidEndFill &&
+          (!fillsEqual(matchedMorphFill?.start.fill, matchedMorphFill?.end.fill) || animateTowardSuccessor)
+        ) {
+          const targetFill = animateTowardSuccessor && successorSolidFill
+            ? successorSolidFill
+            : matchedSolidEndFill;
+          items.push({
+            ty: "fl",
+            c: exportVectorProperty(morphSamples
+              .map((sample, frame) => sample
+                ? {
+                    frame,
+                    value: interpolateColorVector(
+                      matchedSolidFill.color,
+                      targetFill.color,
+                      sample.ratio ?? 0
+                    )
+                  }
+                : null)
+              .filter((value): value is { frame: number; value: [number, number, number, number] } => value !== null)),
+            o: exportScalarProperty(morphSamples
+              .map((sample, frame) => sample
+                ? {
+                    frame,
+                    value: clamp(interpolateNumber(
+                      matchedSolidFill.alpha,
+                      targetFill.alpha,
+                      sample.ratio ?? 0
+                    ) * 100, 0, 100)
+                  }
+                : null)
+              .filter((value): value is { frame: number; value: number } => value !== null)),
+            r: 1
+          });
+        } else {
+          items.push(exportSolidFill(fill, transformSamples));
+        }
+      } else if (fill.kind === "linear-gradient") {
+        items.push(exportLinearGradientFill(fill, transformSamples, sourceSamples));
+      } else if (fill.kind === "radial-gradient") {
+        items.push(exportRadialGradientFill(fill, transformSamples, sourceSamples));
+      } else {
+        issues.push({
+          code: "not_implemented",
+          severity: "warning",
+          message: "This proxy morph fill type is parsed but not exported yet.",
+          details: { fillKind: fill.kind }
+        });
+      }
+    }
+
+    if (group.stroke) {
+      const matchedMorphStroke = matchedMorphStrokeGroup?.strokePath ?? findBestMatchingMorphPathByGeometry(representativePath, morphStrokePaths);
+      const stroke = matchedMorphStroke?.start.stroke ?? group.stroke;
+
+      if (stroke.kind === "solid") {
+        items.push(exportSolidStroke(stroke));
+      } else if (stroke.kind === "linear-gradient") {
+        items.push(exportLinearGradientStroke(stroke, transformSamples, sourceSamples));
+      } else if (stroke.kind === "radial-gradient") {
+        items.push(exportRadialGradientStroke(stroke, transformSamples, sourceSamples));
+      } else if (stroke.kind === "bitmap") {
+        issues.push({
+          code: "unsupported_feature",
+          severity: "warning",
+          message: "Bitmap strokes are not supported by the current Lottie exporter.",
+          details: { bitmapId: stroke.bitmapId }
+        });
+      }
+    }
+
+    if (items.length === group.paths.length) {
+      continue;
+    }
+
+    exported.push({
+      ty: "gr",
+      it: [...items, exportGroupTransform()]
+    });
+  }
+
+  return exported;
+}
+
+function findBestMatchingMorphGroupForProxy(
+  targetGroup: ShapeStyleGroup,
+  candidates: MorphShapeStyleGroup[]
+): MorphShapeStyleGroup | null {
+  let best: MorphShapeStyleGroup | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const candidate of candidates) {
+    if (candidate.paths.length !== targetGroup.paths.length) {
+      continue;
+    }
+
+    const score = morphGroupGeometryScore(targetGroup, candidate);
+    if (score < bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  return best;
+}
+
+function morphGroupGeometryScore(
+  targetGroup: ShapeStyleGroup,
+  candidateGroup: MorphShapeStyleGroup
+): number {
+  const remaining = [...candidateGroup.paths];
+  let total = 0;
+
+  for (const targetPath of targetGroup.paths) {
+    let bestIndex = -1;
+    let bestScore = Number.POSITIVE_INFINITY;
+
+    for (const [index, candidatePath] of remaining.entries()) {
+      const score = Math.min(
+        geometryDistanceScore(targetPath.geometry, candidatePath.start.geometry),
+        geometryDistanceScore(targetPath.geometry, reverseGeometry(candidatePath.start.geometry))
+      );
+
+      if (score < bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    }
+
+    if (bestIndex === -1) {
+      return Number.POSITIVE_INFINITY;
+    }
+
+    total += bestScore;
+    remaining.splice(bestIndex, 1);
+  }
+
+  return total;
+}
+
+function findBestMatchingMorphPath(
+  targetPath: FlashShapePath,
+  candidates: FlashMorphShapePath[]
+): FlashMorphShapePath | null {
+  if (targetPath.styleKey) {
+    const direct = candidates.find((candidate) =>
+      candidate.start.styleKey === targetPath.styleKey || candidate.end.styleKey === targetPath.styleKey
+    );
+    if (direct) {
+      return direct;
+    }
+  }
+
+  let best: FlashMorphShapePath | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const candidate of candidates) {
+    const score = geometryDistanceScore(targetPath.geometry, candidate.start.geometry);
+    if (score < bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  return best;
+}
+
+function findBestMatchingMorphPathByGeometry(
+  targetPath: FlashShapePath,
+  candidates: FlashMorphShapePath[]
+): FlashMorphShapePath | null {
+  let best: FlashMorphShapePath | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (const candidate of candidates) {
+    const score = Math.min(
+      geometryDistanceScore(targetPath.geometry, candidate.start.geometry),
+      geometryDistanceScore(targetPath.geometry, reverseGeometry(candidate.start.geometry))
+    );
+
+    if (score < bestScore) {
+      best = candidate;
+      bestScore = score;
+    }
+  }
+
+  return best;
+}
+
+function hasImmediateStaticMorphSuccessor(
+  track: TimelineTrack,
+  timeline: FlashTimeline,
+  successorSymbolId: string
+): boolean {
+  const currentSample = track.samples[track.lastFrame];
+  const nextFrame = timeline.frames[track.lastFrame + 1];
+  if (!currentSample || !nextFrame) {
+    return false;
+  }
+
+  return nextFrame.displayList.some((instance) =>
+    instance.depth === currentSample.depth && instance.symbolId === successorSymbolId
+  );
 }
 
 function exportShapeTrackWithBitmapFills(
@@ -789,6 +1558,39 @@ function groupPathsByStyle(paths: FlashShapePath[]): ShapeStyleGroup[] {
       index,
       fill: path.fill,
       stroke: path.stroke,
+      paths: [path]
+    });
+  }
+
+  return [...groups.values()].sort((left, right) => left.index - right.index);
+}
+
+function groupMorphPathsByStyle(paths: FlashMorphShapePath[]): MorphShapeStyleGroup[] {
+  const groups = new Map<string, MorphShapeStyleGroup>();
+
+  for (const [index, path] of paths.entries()) {
+    const startFillKey = path.start.fill ? JSON.stringify(path.start.fill) : "none";
+    const endFillKey = path.end.fill ? JSON.stringify(path.end.fill) : "none";
+    const startStrokeKey = path.start.stroke ? JSON.stringify(path.start.stroke) : "none";
+    const endStrokeKey = path.end.stroke ? JSON.stringify(path.end.stroke) : "none";
+    const key = [
+      path.start.styleKey ?? "none",
+      path.end.styleKey ?? "none",
+      startFillKey,
+      endFillKey,
+      startStrokeKey,
+      endStrokeKey
+    ].join("|");
+    const existing = groups.get(key);
+    if (existing) {
+      existing.paths.push(path);
+      continue;
+    }
+
+    groups.set(key, {
+      index,
+      ...(path.start.fill || path.end.fill ? { fillPath: path } : {}),
+      ...(path.start.stroke || path.end.stroke ? { strokePath: path } : {}),
       paths: [path]
     });
   }
@@ -1417,6 +2219,114 @@ function exportMorphShapePath(
   ];
 }
 
+function exportMorphShapePaths(
+  paths: FlashMorphShapePath[],
+  samples: Array<FlashDisplayObjectState | null>,
+  issues: ConversionIssue[]
+): Record<string, unknown>[] {
+  const exported: Record<string, unknown>[] = [];
+  const filteredPaths = suppressOverlappingMorphFillPaths(normalizeProxyStaticMorphPaths(paths));
+
+  for (const group of groupMorphPathsByStyle(filteredPaths)) {
+    const items: Record<string, unknown>[] = group.paths.map((path) => ({
+      ty: "sh",
+      ks: exportMorphBezier(path, samples)
+    }));
+
+    if (group.fillPath) {
+      const fill = exportMorphFill(group.fillPath, samples, issues);
+      if (fill) {
+        items.push(fill);
+      }
+    }
+
+    if (group.strokePath) {
+      const stroke = exportMorphStroke(group.strokePath, samples);
+      if (stroke) {
+        items.push(stroke);
+      }
+    }
+
+    if (items.length === group.paths.length) {
+      issues.push({
+        code: "unsupported_feature",
+        severity: "warning",
+        message: "Morph path group without a supported fill or stroke is skipped."
+      });
+      continue;
+    }
+
+    exported.push({
+      ty: "gr",
+      it: [...items, exportGroupTransform()]
+    });
+  }
+
+  return exported;
+}
+
+function normalizeProxyStaticMorphPaths(paths: FlashMorphShapePath[]): FlashMorphShapePath[] {
+  const staticStrokeGeometries = paths
+    .filter((path) =>
+      path.start.stroke &&
+      path.end.stroke &&
+      geometriesApproximatelyEqual(path.start.geometry, path.end.geometry)
+    )
+    .map((path) => path.start.geometry);
+
+  if (staticStrokeGeometries.length === 0) {
+    return paths;
+  }
+
+  return paths.map((path) => {
+    if (
+      !path.start.fill ||
+      !path.end.fill ||
+      geometriesApproximatelyEqual(path.start.geometry, path.end.geometry)
+    ) {
+      return path;
+    }
+
+    const endLooksLikeStroke = staticStrokeGeometries.some((geometry) =>
+      geometriesApproximatelyEqual(path.end.geometry, geometry, 0.1) ||
+      geometriesApproximatelyEqual(path.end.geometry, reverseGeometry(geometry), 0.1)
+    );
+
+    if (!endLooksLikeStroke) {
+      return path;
+    }
+
+    return {
+      start: path.start,
+      end: {
+        ...path.end,
+        geometry: path.start.geometry
+      }
+    };
+  });
+}
+
+function suppressOverlappingMorphFillPaths(paths: FlashMorphShapePath[]): FlashMorphShapePath[] {
+  return paths.filter((path, index) => {
+    const pathFill = path.start.fill;
+    if (pathFill?.kind !== "solid" || !fillsEqual(path.start.fill, path.end.fill)) {
+      return true;
+    }
+
+    return !paths.some((other, otherIndex) => {
+      if (otherIndex === index || other.start.fill?.kind !== "solid") {
+        return false;
+      }
+
+      if (path.start.styleKey === other.start.styleKey) {
+        return false;
+      }
+
+      return geometriesApproximatelyEqual(path.start.geometry, other.start.geometry);
+    });
+  });
+}
+
 function bakePathAnimation(
   path: FlashShapePath,
   samples: Array<FlashDisplayObjectState | null>
@@ -1465,7 +2375,7 @@ function exportMorphBezier(
 ): Record<string, unknown> {
   const [startGeometry, endGeometry] = prepareMorphGeometryPair(path.start.geometry, path.end.geometry);
 
-  if (!canMorphGeometries(startGeometry, endGeometry)) {
+  if (!canMorphGeometries(startGeometry, endGeometry) || geometriesApproximatelyEqual(startGeometry, endGeometry)) {
     return {
       a: 0,
       k: bezierGeometryToLottie(startGeometry)
@@ -1648,12 +2558,12 @@ function exportMorphFill(
       ty: "gf",
       o: { a: 0, k: 100 },
       r: 1,
-      s: exportVectorProperty(startKeyframes),
-      e: exportVectorProperty(endKeyframes),
+      s: exportDiscreteVectorProperty(startKeyframes),
+      e: exportDiscreteVectorProperty(endKeyframes),
       t: 1,
       g: {
         p: startFill.stops.length,
-        k: exportVectorProperty(gradientKeyframes)
+        k: exportDiscreteVectorProperty(gradientKeyframes)
       }
     };
   }
@@ -1700,14 +2610,14 @@ function exportMorphFill(
       ty: "gf",
       o: { a: 0, k: 100 },
       r: 1,
-      s: exportVectorProperty(startKeyframes),
-      e: exportVectorProperty(endKeyframes),
+      s: exportDiscreteVectorProperty(startKeyframes),
+      e: exportDiscreteVectorProperty(endKeyframes),
       t: 2,
-      h: exportScalarProperty(highlightKeyframes),
+      h: exportDiscreteScalarProperty(highlightKeyframes),
       a: { a: 0, k: 0 },
       g: {
         p: startFill.stops.length,
-        k: exportVectorProperty(gradientKeyframes)
+        k: exportDiscreteVectorProperty(gradientKeyframes)
       }
     };
   }
@@ -1763,6 +2673,70 @@ function exportSolidStroke(stroke: FlashSolidStroke): Record<string, unknown> {
     ty: "st",
     c: { a: 0, k: colorVector(stroke.color) },
     o: { a: 0, k: clamp(stroke.alpha * 100, 0, 100) },
+    w: { a: 0, k: stroke.width },
+    lc: lineCapToLottie(stroke.lineCap),
+    lj: lineJoinToLottie(stroke.lineJoin),
+    ...(stroke.miterLimit !== undefined ? { ml: stroke.miterLimit } : {})
+  };
+}
+
+function exportLinearGradientStroke(
+  stroke: FlashGradientStroke,
+  transformSamples: TransformSample[] = [],
+  sourceSamples?: Array<FlashDisplayObjectState | null>
+): Record<string, unknown> {
+  const start = sourceSamples && needsBakedMatrix(sourceSamples)
+    ? exportGradientPointProperty(stroke, -16384 / 20, 0, transformSamples, sourceSamples)
+    : exportGradientPointProperty(stroke, -16384 / 20, 0, transformSamples, sourceSamples);
+  const end = sourceSamples && needsBakedMatrix(sourceSamples)
+    ? exportGradientPointProperty(stroke, 16384 / 20, 0, transformSamples, sourceSamples)
+    : exportGradientPointProperty(stroke, 16384 / 20, 0, transformSamples, sourceSamples);
+
+  return {
+    ty: "gs",
+    o: { a: 0, k: 100 },
+    r: 1,
+    s: start,
+    e: end,
+    t: 1,
+    g: {
+      p: stroke.stops.length,
+      k: {
+        a: 0,
+        k: flattenGradientStops(stroke)
+      }
+    },
+    w: { a: 0, k: stroke.width },
+    lc: lineCapToLottie(stroke.lineCap),
+    lj: lineJoinToLottie(stroke.lineJoin),
+    ...(stroke.miterLimit !== undefined ? { ml: stroke.miterLimit } : {})
+  };
+}
+
+function exportRadialGradientStroke(
+  stroke: FlashGradientStroke,
+  transformSamples: TransformSample[] = [],
+  sourceSamples?: Array<FlashDisplayObjectState | null>
+): Record<string, unknown> {
+  const start = exportGradientPointProperty(stroke, 0, 0, transformSamples, sourceSamples);
+  const end = exportGradientPointProperty(stroke, 16384 / 20, 0, transformSamples, sourceSamples);
+
+  return {
+    ty: "gs",
+    o: { a: 0, k: 100 },
+    r: 1,
+    s: start,
+    e: end,
+    t: 2,
+    h: { a: 0, k: clamp((stroke.focalPoint ?? 0) * 100, -100, 100) },
+    a: { a: 0, k: 0 },
+    g: {
+      p: stroke.stops.length,
+      k: {
+        a: 0,
+        k: flattenGradientStops(stroke)
+      }
+    },
     w: { a: 0, k: stroke.width },
     lc: lineCapToLottie(stroke.lineCap),
     lj: lineJoinToLottie(stroke.lineJoin),
@@ -1910,6 +2884,44 @@ function exportVectorProperty(
   return {
     a: 1,
     k: compressed.map((keyframe, index) => exportAnimatedVectorKeyframe(keyframe, compressed[index + 1]))
+  };
+}
+
+function exportDiscreteScalarProperty(
+  keyframes: Array<{ frame: number; value: number }>
+): Record<string, unknown> {
+  const uniqueValues = new Set(keyframes.map((keyframe) => Math.round(keyframe.value * 1000)));
+  if (uniqueValues.size <= 1) {
+    return { a: 0, k: keyframes[0]?.value ?? 0 };
+  }
+
+  return {
+    a: 1,
+    k: keyframes.map((keyframe, index) => ({
+      t: keyframe.frame,
+      s: [keyframe.value],
+      h: 1,
+      ...(index < keyframes.length - 1 ? { e: [keyframes[index + 1]?.value ?? keyframe.value] } : {})
+    }))
+  };
+}
+
+function exportDiscreteVectorProperty(
+  keyframes: Array<{ frame: number; value: number[] }>
+): Record<string, unknown> {
+  const uniqueValues = new Set(keyframes.map((keyframe) => keyframe.value.join(",")));
+  if (uniqueValues.size <= 1) {
+    return { a: 0, k: keyframes[0]?.value ?? [0, 0] };
+  }
+
+  return {
+    a: 1,
+    k: keyframes.map((keyframe, index) => ({
+      t: keyframe.frame,
+      s: keyframe.value,
+      h: 1,
+      ...(index < keyframes.length - 1 ? { e: keyframes[index + 1]?.value ?? keyframe.value } : {})
+    }))
   };
 }
 
@@ -2469,10 +3481,29 @@ function geometryDistanceScore(
 ): number {
   return start.vertices.reduce((sum, point, index) => {
     const target = end.vertices[index] ?? point;
+    const inLeft = start.inTangents[index] ?? [0, 0];
+    const inRight = end.inTangents[index] ?? inLeft;
+    const outLeft = start.outTangents[index] ?? [0, 0];
+    const outRight = end.outTangents[index] ?? outLeft;
     const dx = point[0] - target[0];
     const dy = point[1] - target[1];
-    return sum + dx * dx + dy * dy;
+    const dix = inLeft[0] - inRight[0];
+    const diy = inLeft[1] - inRight[1];
+    const dox = outLeft[0] - outRight[0];
+    const doy = outLeft[1] - outRight[1];
+    return sum + dx * dx + dy * dy + dix * dix + diy * diy + dox * dox + doy * doy;
   }, 0);
+}
+
+function geometriesApproximatelyEqual(
+  start: FlashShapePath["geometry"],
+  end: FlashShapePath["geometry"],
+  epsilon = 1e-4
+): boolean {
+  return canMorphGeometries(start, end) &&
+    start.vertices.every((point, index) => pointsApproximatelyEqual(point, end.vertices[index] ?? point, epsilon)) &&
+    start.inTangents.every((point, index) => pointsApproximatelyEqual(point, end.inTangents[index] ?? point, epsilon)) &&
+    start.outTangents.every((point, index) => pointsApproximatelyEqual(point, end.outTangents[index] ?? point, epsilon));
 }
 
 function rotateArray<T>(values: T[], shift: number): T[] {

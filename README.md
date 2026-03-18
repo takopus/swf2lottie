@@ -47,6 +47,7 @@ Supported on the current branch:
 - solid fills;
 - linear and radial gradients;
 - solid strokes;
+- linear and radial gradient strokes;
 - simple vector masks;
 - alpha, tint and brightness color effects.
 
@@ -70,6 +71,7 @@ Known bitmap limitation:
 - bitmap `alpha` is exported;
 - bitmap `tint` and `brightness` are not exported exactly and should warn;
 - complex bitmap fill cases still rely on image-layer tiling and masking, because `Lottie` does not provide a native bitmap fill style for vector shapes.
+- bitmap strokes are not exported and should warn.
 
 ## Fixtures
 
@@ -139,3 +141,4 @@ npm run export:fixture -- 16
 
 - Dotted line-style case is still intentionally left unresolved. It seems flash exports all styled lines as shapes actually, and for some reason fill of the dotted line-style gets not line color, but fill color of nearby (?) shape.
 - Elliptical radial gradients are not exported exactly. `Lottie` does not provide a direct equivalent of Flash gradient matrix deformation for radial fills, so those cases currently degrade to regular radial gradients.
+- Some proxy tween patterns exported by Flash still need explicit handling on a case-by-case basis. The converter already resolves several of them deterministically, but this remains a class of edge cases to watch when new fixtures appear.
