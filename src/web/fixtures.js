@@ -1,4 +1,11 @@
+import { BUILD_LABEL } from "./build-info.js";
+
 const gallery = document.getElementById("gallery");
+const buildBadge = document.getElementById("build-badge");
+
+if (buildBadge) {
+  buildBadge.textContent = BUILD_LABEL;
+}
 
 loadFixtures().catch((error) => {
   gallery.replaceChildren(renderMessage(error instanceof Error ? error.message : "Failed to load fixture gallery."));

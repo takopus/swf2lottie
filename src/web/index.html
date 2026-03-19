@@ -8,21 +8,29 @@
   </head>
   <body>
     <main class="app-shell">
-      <section class="topbar">
+      <section id="topbar" class="topbar">
         <div class="topbar-controls">
           <label class="file-button">
             <input id="file-input" type="file" accept=".swf,application/x-shockwave-flash" />
-            <span>Choose SWF file</span>
+            <span>Choose SWF file or drop it anywhere</span>
           </label>
         </div>
-        <p id="status" class="status">No file selected.</p>
+        <div id="status" class="status" hidden></div>
+      </section>
+
+      <section id="output-panel" class="output-panel" hidden>
+        <pre id="output-json" class="output-json"></pre>
       </section>
 
       <section id="workspace" class="workspace" hidden>
         <div class="preview-column">
           <div class="preview-frame">
             <div id="preview-stage" class="preview-stage">
-              <div id="preview" class="preview-surface" aria-label="Lottie preview"></div>
+              <div class="preview-surface" aria-label="Lottie preview">
+                <div class="preview-background" aria-hidden="true"></div>
+                <div class="preview-frame-line" aria-hidden="true"></div>
+                <div id="preview" class="preview-content"></div>
+              </div>
             </div>
             <div class="preview-toolbar">
               <div class="toolbar-track-row">
@@ -34,17 +42,40 @@
               <div class="toolbar-row">
                 <div class="toolbar-left">
                   <div class="toolbar-buttons">
-                    <button id="first-frame" type="button" aria-label="Go to start">|&lt;</button>
-                    <button id="prev-frame" type="button" aria-label="Previous frame">&lt;</button>
-                    <button id="toolbar-play" type="button" aria-label="Toggle playback">Play</button>
-                    <button id="next-frame" type="button" aria-label="Next frame">&gt;</button>
+                    <button id="first-frame" class="icon-button icon-only-button" type="button" aria-label="Go to start">
+                      <img class="button-icon" src="/icons/rewind.svg" alt="" />
+                    </button>
+                    <button id="prev-frame" class="icon-button icon-only-button" type="button" aria-label="Previous frame">
+                      <img class="button-icon" src="/icons/frame-step-back.svg" alt="" />
+                    </button>
+                    <button id="toolbar-play" class="icon-button icon-only-button play-button" type="button" aria-label="Toggle playback">
+                      <img id="toolbar-play-icon" class="button-icon" src="/icons/play.svg" alt="" />
+                    </button>
+                    <button id="next-frame" class="icon-button icon-only-button" type="button" aria-label="Next frame">
+                      <img class="button-icon" src="/icons/frame-step.svg" alt="" />
+                    </button>
+                    <button id="last-frame" class="icon-button icon-only-button" type="button" aria-label="Go to end">
+                      <img class="button-icon" src="/icons/go-end.svg" alt="" />
+                    </button>
                   </div>
                 </div>
                 <div class="toolbar-buttons">
-                  <button id="zoom-out" type="button" aria-label="Zoom out">Zoom out</button>
-                  <button id="zoom-reset" type="button" aria-label="Reset zoom">100%</button>
-                  <button id="zoom-in" type="button" aria-label="Zoom in">Zoom in</button>
-                  <button id="zoom-fit" type="button" aria-label="Fit preview">Fit</button>
+                  <button id="zoom-out" class="icon-button" type="button" aria-label="Zoom out">
+                    <img class="button-icon" src="/icons/zoom-out.svg" alt="" />
+                    <span>Out</span>
+                  </button>
+                  <button id="zoom-reset" class="icon-button" type="button" aria-label="Reset zoom">
+                    <img class="button-icon" src="/icons/zoom-100.svg" alt="" />
+                    <span>100%</span>
+                  </button>
+                  <button id="zoom-in" class="icon-button" type="button" aria-label="Zoom in">
+                    <img class="button-icon" src="/icons/zoom-in.svg" alt="" />
+                    <span>In</span>
+                  </button>
+                  <button id="zoom-fit" class="icon-button" type="button" aria-label="Fit preview">
+                    <img class="button-icon" src="/icons/zoom-fit.svg" alt="" />
+                    <span>Fit</span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -52,15 +83,6 @@
         </div>
 
         <aside class="properties-panel">
-          <section class="properties-card">
-            <h2>Result</h2>
-            <p id="summary" class="summary">No converted file selected.</p>
-            <div class="summary-actions">
-              <span id="issue-counts" class="issue-counts">0 warnings, 0 errors</span>
-              <button id="toggle-output" type="button" hidden>Show output</button>
-            </div>
-          </section>
-
           <section class="properties-card">
             <h2>Properties</h2>
             <div class="properties-fields">
@@ -93,10 +115,6 @@
         </aside>
       </section>
 
-      <section id="output-panel" class="output-panel" hidden>
-        <pre id="output-json" class="output-json"></pre>
-      </section>
-
       <section class="recent-panel">
         <div class="recent-header">
           <h2>Recent saves</h2>
@@ -105,6 +123,13 @@
         <div id="recent-grid" class="recent-grid"></div>
       </section>
     </main>
+    <div id="drop-overlay" class="drop-overlay" hidden>
+      <div class="drop-overlay-panel">
+        <span class="drop-overlay-plus">+</span>
+        <span class="drop-overlay-text">Drop SWF file anywhere</span>
+      </div>
+    </div>
+    <div id="build-badge" class="build-badge" aria-hidden="true"></div>
 
     <script src="/vendor/lottie.min.js"></script>
     <script type="module" src="/app.js"></script>

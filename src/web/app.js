@@ -1,21 +1,30 @@
+import { BUILD_LABEL } from "./build-info.js";
+
+const MIN_ZOOM = 0.05;
+const MAX_ZOOM = 24;
+const ZOOM_STEP_FACTOR = 1.25;
+
 const fileInput = document.getElementById("file-input");
+const buildBadge = document.getElementById("build-badge");
+const topbar = document.getElementById("topbar");
 const status = document.getElementById("status");
 const workspace = document.getElementById("workspace");
+const dropOverlay = document.getElementById("drop-overlay");
 const previewStage = document.getElementById("preview-stage");
 const preview = document.getElementById("preview");
+const previewSurface = preview?.parentElement;
 const toolbarPlay = document.getElementById("toolbar-play");
+const toolbarPlayIcon = document.getElementById("toolbar-play-icon");
 const firstFrameButton = document.getElementById("first-frame");
 const prevFrameButton = document.getElementById("prev-frame");
 const nextFrameButton = document.getElementById("next-frame");
+const lastFrameButton = document.getElementById("last-frame");
 const frameSlider = document.getElementById("frame-slider");
 const frameInput = document.getElementById("frame-input");
 const zoomInButton = document.getElementById("zoom-in");
 const zoomOutButton = document.getElementById("zoom-out");
 const zoomFitButton = document.getElementById("zoom-fit");
 const zoomResetButton = document.getElementById("zoom-reset");
-const summary = document.getElementById("summary");
-const issueCounts = document.getElementById("issue-counts");
-const toggleOutput = document.getElementById("toggle-output");
 const outputPanel = document.getElementById("output-panel");
 const outputJson = document.getElementById("output-json");
 const bitmapStorageInput = document.getElementById("bitmap-storage");
@@ -26,6 +35,10 @@ const updatePreviewButton = document.getElementById("update-preview");
 const saveJsonButton = document.getElementById("save-json");
 const savedOutput = document.getElementById("saved-output");
 const recentGrid = document.getElementById("recent-grid");
+
+if (buildBadge) {
+  buildBadge.textContent = BUILD_LABEL;
+}
 
 const recentEntries = [];
 const recentCardAnimations = [];
@@ -40,29 +53,50 @@ let currentIssues = [];
 let currentZoom = 1;
 let currentFrame = 0;
 let isPlaying = false;
+let dragDepth = 0;
 
 window.addEventListener("pageshow", () => {
   clearWorkspace();
 });
 
 fileInput.addEventListener("change", () => {
-  selectedFile = fileInput.files?.[0] ?? null;
+  const nextFile = fileInput.files?.[0] ?? null;
+  void loadSelectedFile(nextFile);
+});
+
+topbar.addEventListener("dragenter", onDragEnter);
+topbar.addEventListener("dragover", onDragOver);
+topbar.addEventListener("dragleave", onDragLeave);
+topbar.addEventListener("drop", onDrop);
+
+window.addEventListener("dragenter", onDragEnter);
+window.addEventListener("dragover", onDragOver);
+window.addEventListener("dragleave", onDragLeave);
+window.addEventListener("drop", onDrop);
+
+async function loadSelectedFile(file) {
+  selectedFile = file;
   clearWorkspace();
 
   if (!selectedFile) {
-    status.textContent = "No file selected.";
+    return;
+  }
+
+  if (!isSwfFile(selectedFile)) {
+    selectedFile = null;
+    setStatusMessage("Only SWF files are supported.", "error");
     return;
   }
 
   void convertSelectedFile();
-});
+}
 
 async function convertSelectedFile() {
   if (!selectedFile) {
     return;
   }
 
-  status.textContent = `Converting ${selectedFile.name}...`;
+  setStatusMessage(`Converting ${selectedFile.name}...`);
   savedOutput.hidden = true;
 
   try {
@@ -79,7 +113,7 @@ async function convertSelectedFile() {
       destroyPreviewAnimation();
       workspace.hidden = true;
       outputPanel.hidden = true;
-      status.textContent = payload.message ?? "Conversion failed.";
+      setStatusMessage(payload.message ?? "Conversion failed.", "error");
       return;
     }
 
@@ -89,17 +123,89 @@ async function convertSelectedFile() {
     currentWorkingAnimation = structuredClone(payload.animation);
     currentBitmapAssets = Array.isArray(payload.bitmapAssets) ? structuredClone(payload.bitmapAssets) : [];
     renderWorkspace();
-    status.textContent = `Converted ${selectedFile.name}.`;
   } catch (error) {
     clearWorkspace();
-    status.textContent = error instanceof Error ? error.message : "Conversion failed.";
+    setStatusMessage(error instanceof Error ? error.message : "Conversion failed.", "error");
   }
+}
+
+function onDragEnter(event) {
+  if (!containsFiles(event)) {
+    return;
+  }
+
+  event.preventDefault();
+  dragDepth += 1;
+  setDropUi(true);
+}
+
+function onDragOver(event) {
+  if (!containsFiles(event)) {
+    return;
+  }
+
+  event.preventDefault();
+  event.dataTransfer.dropEffect = "copy";
+  setDropUi(true);
+}
+
+function onDragLeave(event) {
+  if (!containsFiles(event)) {
+    return;
+  }
+
+  event.preventDefault();
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (dragDepth === 0) {
+    setDropUi(false);
+  }
+}
+
+function onDrop(event) {
+  if (!containsFiles(event)) {
+    return;
+  }
+
+  event.preventDefault();
+  dragDepth = 0;
+  setDropUi(false);
+  const file = event.dataTransfer?.files?.[0] ?? null;
+  if (fileInput) {
+    fileInput.value = "";
+  }
+  void loadSelectedFile(file);
+}
+
+function setDropUi(active) {
+  topbar.classList.toggle("is-drop-target", active);
+  dropOverlay.hidden = !active;
+}
+
+function containsFiles(event) {
+  const types = event.dataTransfer?.types;
+  if (!types) {
+    return false;
+  }
+
+  return Array.from(types).includes("Files") || types.contains?.("Files") === true;
+}
+
+function isSwfFile(file) {
+  return /\.swf$/i.test(file.name) || file.type === "application/x-shockwave-flash" || file.type === "";
 }
 
 toolbarPlay.addEventListener("click", togglePlayback);
 firstFrameButton.addEventListener("click", () => goToFrame(0));
 prevFrameButton.addEventListener("click", () => goToFrame(Math.max(0, currentFrame - 1)));
 nextFrameButton.addEventListener("click", () => goToFrame(currentFrame + 1));
+lastFrameButton.addEventListener("click", () => {
+  if (!currentWorkingAnimation) {
+    return;
+  }
+
+  const maxFrame = Math.max(0, Math.round(currentWorkingAnimation.op - currentWorkingAnimation.ip - 1));
+  goToFrame(maxFrame);
+});
 frameSlider.addEventListener("input", () => goToFrame(Number(frameSlider.value)));
 frameInput.addEventListener("change", applyFrameInput);
 frameInput.addEventListener("input", () => {
@@ -112,16 +218,10 @@ frameInput.addEventListener("keydown", (event) => {
     applyFrameInput();
   }
 });
-zoomInButton.addEventListener("click", () => setZoom(currentZoom + 0.25));
-zoomOutButton.addEventListener("click", () => setZoom(Math.max(0.5, currentZoom - 0.25)));
+zoomInButton.addEventListener("click", () => setZoom(currentZoom * ZOOM_STEP_FACTOR));
+zoomOutButton.addEventListener("click", () => setZoom(currentZoom / ZOOM_STEP_FACTOR));
 zoomFitButton.addEventListener("click", fitZoom);
 zoomResetButton.addEventListener("click", () => setZoom(1));
-
-toggleOutput.addEventListener("click", () => {
-  const visible = outputPanel.hidden;
-  outputPanel.hidden = !visible;
-  toggleOutput.textContent = visible ? "Hide output" : "Show output";
-});
 
 fpsInput.addEventListener("input", markDirty);
 widthInput.addEventListener("input", markDirty);
@@ -139,11 +239,11 @@ function clearWorkspace() {
   currentZoom = 1;
   currentFrame = 0;
   isPlaying = false;
+  dragDepth = 0;
+  setDropUi(false);
   workspace.hidden = true;
   outputPanel.hidden = true;
   outputJson.textContent = "";
-  toggleOutput.hidden = true;
-  toggleOutput.textContent = "Show output";
   bitmapStorageInput.value = "inline";
   fpsInput.value = "";
   widthInput.value = "";
@@ -152,8 +252,8 @@ function clearWorkspace() {
   saveJsonButton.disabled = true;
   savedOutput.hidden = true;
   savedOutput.textContent = "";
-  summary.textContent = "No converted file selected.";
-  issueCounts.textContent = "0 warnings, 0 errors";
+  status.hidden = true;
+  status.textContent = "";
   frameSlider.min = "0";
   frameSlider.max = "0";
   frameSlider.value = "0";
@@ -162,10 +262,15 @@ function clearWorkspace() {
   frameInput.value = "1";
   previewStage.style.width = "";
   previewStage.style.height = "";
+  if (previewSurface) {
+    previewSurface.style.width = "";
+    previewSurface.style.height = "";
+  }
   preview.style.width = "";
   preview.style.height = "";
-  preview.style.transform = "";
 }
+
+syncToolbarPlayIcon(false);
 
 function renderWorkspace() {
   if (!currentWorkingAnimation) {
@@ -181,13 +286,13 @@ function renderWorkspace() {
   updatePreviewButton.disabled = true;
   saveJsonButton.disabled = false;
   savedOutput.hidden = true;
-  renderSummary();
+  renderStatus();
   updateStageSize();
   syncFrameSlider();
   renderPreviewAnimation();
 }
 
-function renderSummary() {
+function renderStatus() {
   if (!currentWorkingAnimation) {
     return;
   }
@@ -197,17 +302,13 @@ function renderSummary() {
   const hasIssues = warningCount + errorCount > 0;
   const sourceLabel = currentSourceName ?? "saved animation";
 
-  summary.textContent = `${sourceLabel}: ${currentWorkingAnimation.op - currentWorkingAnimation.ip} frames @ ${formatNumber(currentWorkingAnimation.fr)} fps.`;
-  issueCounts.textContent = `${warningCount} warnings, ${errorCount} errors`;
-  toggleOutput.hidden = !hasIssues;
-  if (!hasIssues) {
-    outputPanel.hidden = true;
-    toggleOutput.textContent = "Show output";
-    outputJson.textContent = "";
-    return;
-  }
-
-  outputJson.textContent = formatIssues(currentIssues);
+  status.hidden = false;
+  status.innerHTML = `
+    <span class="status-summary">Converted ${escapeHtml(sourceLabel)}: ${currentWorkingAnimation.op - currentWorkingAnimation.ip} frames @ ${formatNumber(currentWorkingAnimation.fr)} fps,</span>
+    ${formatIssueCountsHtml(warningCount, errorCount)}
+  `;
+  outputPanel.hidden = !hasIssues;
+  outputJson.textContent = hasIssues ? formatIssues(currentIssues) : "";
 }
 
 function renderPreviewAnimation() {
@@ -253,16 +354,25 @@ function updateStageSize() {
   if (!currentWorkingAnimation) {
     previewStage.style.width = "";
     previewStage.style.height = "";
+    if (previewSurface) {
+      previewSurface.style.width = "";
+      previewSurface.style.height = "";
+    }
     preview.style.width = "";
     preview.style.height = "";
     return;
   }
 
-  preview.style.width = `${currentWorkingAnimation.w}px`;
-  preview.style.height = `${currentWorkingAnimation.h}px`;
+  if (previewSurface) {
+    previewSurface.style.width = `${currentWorkingAnimation.w * currentZoom}px`;
+    previewSurface.style.height = `${currentWorkingAnimation.h * currentZoom}px`;
+  }
+  preview.style.width = `${currentWorkingAnimation.w * currentZoom}px`;
+  preview.style.height = `${currentWorkingAnimation.h * currentZoom}px`;
 }
 
 function setPlayback(playing) {
+  const stateChanged = isPlaying !== playing;
   isPlaying = playing;
   if (currentAnimationInstance) {
     if (playing) {
@@ -271,6 +381,9 @@ function setPlayback(playing) {
       currentAnimationInstance.pause();
       currentAnimationInstance.goToAndStop(currentFrame, true);
     }
+  }
+  if (stateChanged) {
+    syncToolbarPlayIcon(playing);
   }
   updatePlaybackUi();
 }
@@ -299,7 +412,6 @@ function updatePlaybackUi() {
   const frameNumber = currentFrame + 1;
   frameSlider.value = String(currentFrame);
   frameInput.value = String(frameNumber);
-  toolbarPlay.textContent = isPlaying ? "Pause" : "Play";
 }
 
 function syncFrameSlider() {
@@ -337,7 +449,7 @@ function applyFrameInput() {
 }
 
 function setZoom(nextZoom) {
-  currentZoom = Math.min(4, Math.max(0.5, nextZoom));
+  currentZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, nextZoom));
   applyZoom();
 }
 
@@ -346,10 +458,10 @@ function fitZoom() {
     return;
   }
 
-  const stageWidth = previewStage.clientWidth;
-  const stageHeight = previewStage.clientHeight;
-  const contentWidth = preview.offsetWidth || stageWidth;
-  const contentHeight = preview.offsetHeight || stageHeight;
+  const stageWidth = Math.max(0, previewStage.clientWidth - 2);
+  const stageHeight = Math.max(0, previewStage.clientHeight - 2);
+  const contentWidth = currentWorkingAnimation.w;
+  const contentHeight = currentWorkingAnimation.h;
   if (stageWidth <= 0 || stageHeight <= 0 || contentWidth <= 0 || contentHeight <= 0) {
     currentZoom = 1;
     applyZoom();
@@ -357,12 +469,22 @@ function fitZoom() {
   }
 
   const fitScale = Math.min(stageWidth / contentWidth, stageHeight / contentHeight);
-  currentZoom = Math.min(4, Math.max(0.5, fitScale));
+  currentZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, fitScale));
   applyZoom();
 }
 
 function applyZoom() {
-  preview.style.transform = `scale(${currentZoom})`;
+  if (!previewSurface) {
+    return;
+  }
+  updateStageSize();
+}
+
+function syncToolbarPlayIcon(playing) {
+  if (!(toolbarPlayIcon instanceof HTMLImageElement)) {
+    return;
+  }
+  toolbarPlayIcon.src = playing ? "/icons/pause.svg" : "/icons/play.svg";
 }
 
 function markDirty() {
@@ -391,7 +513,7 @@ function applyPreviewEdits() {
 
   updatePreviewButton.disabled = true;
   outputJson.textContent = JSON.stringify(currentWorkingAnimation, null, 2);
-  renderSummary();
+  renderStatus();
   updateStageSize();
   syncFrameSlider();
   renderPreviewAnimation();
@@ -685,6 +807,37 @@ function formatIssues(issues) {
 
 function formatNumber(value) {
   return Number.isInteger(value) ? String(value) : value.toFixed(2).replace(/\.?0+$/, "");
+}
+
+function setStatusMessage(message, severity = "info") {
+  status.hidden = false;
+  status.textContent = message;
+  status.classList.toggle("has-errors", severity === "error");
+}
+
+function formatIssueCountsHtml(warningCount, errorCount) {
+  const warningClassName = [
+    "status-counts",
+    warningCount > 0 ? "has-warnings" : ""
+  ].filter(Boolean).join(" ");
+  const errorClassName = [
+    "status-counts",
+    errorCount > 0 ? "has-errors" : ""
+  ].filter(Boolean).join(" ");
+
+  return `
+    <span class="${warningClassName}">${warningCount > 0 ? `${warningCount} warnings,` : "no warnings,"}</span>
+    <span class="${errorClassName}">${errorCount > 0 ? `${errorCount} errors` : "no errors"}</span>
+  `;
+}
+
+function escapeHtml(value) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("'", "&#39;");
 }
 
 clearWorkspace();

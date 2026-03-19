@@ -21,6 +21,20 @@ body {
     linear-gradient(180deg, #f4efe4 0%, var(--bg) 100%);
 }
 
+.build-badge {
+  position: fixed;
+  right: 14px;
+  bottom: 10px;
+  z-index: 1000;
+  pointer-events: none;
+  user-select: none;
+  color: rgba(31, 41, 55, 0.62);
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+}
+
 .page {
   width: min(1440px, calc(100% - 28px));
   margin: 20px auto 28px;

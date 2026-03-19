@@ -8,6 +8,7 @@
   --muted: #74695f;
   --accent: #d1652f;
   --accent-dark: #9c451c;
+  --color-primary: #2a73d9;
   --soft-line: rgba(31, 27, 24, 0.14);
   --preview-bg: #f7f2e9;
   --shadow: 10px 10px 0 rgba(31, 27, 24, 0.12);
@@ -25,6 +26,20 @@ body {
   background:
     radial-gradient(circle at top left, rgba(209, 101, 47, 0.18), transparent 28%),
     linear-gradient(180deg, #f7f1e7 0%, var(--page-bg) 100%);
+}
+
+.build-badge {
+  position: fixed;
+  right: 14px;
+  bottom: 10px;
+  z-index: 1000;
+  pointer-events: none;
+  user-select: none;
+  color: rgba(31, 27, 24, 0.62);
+  font-size: 12px;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
 }
 
 button,
@@ -66,6 +81,12 @@ input[type="number"]::-webkit-inner-spin-button {
 
 .topbar {
   padding: 18px 20px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  border-style: dashed;
+  border-width: 3px;
+  transition: background-color 120ms ease-out, border-color 120ms ease-out, transform 120ms ease-out;
 }
 
 .topbar-controls {
@@ -73,20 +94,50 @@ input[type="number"]::-webkit-inner-spin-button {
   gap: 12px;
   align-items: center;
   flex-wrap: wrap;
+  justify-content: center;
+}
+
+.topbar.is-drop-target {
+  background: rgba(255, 251, 244, 0.98);
+  border-color: var(--accent);
+  transform: translateY(-1px);
 }
 
 .file-button,
 button {
-  border: 2px solid var(--border);
-  border-radius: 999px;
-  padding: 12px 18px;
-  font-weight: 700;
+  position: relative;
+  background: none;
+  outline: none;
+  border: none;
+  cursor: pointer;
+  background-color: var(--color-primary);
+  border: 1px solid var(--color-primary);
+  color: #fff;
+  text-align: center;
+  text-decoration: none;
+  font-size: 0.875em;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-weight: 600;
+  border-radius: 6px;
+  height: 2.5em;
+  flex-shrink: 0;
+  white-space: nowrap;
+  padding: 0 0.9em;
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  overflow: visible;
+  min-width: 11em;
+  transition:
+    color 0.2s ease-out,
+    background-color 0.2s ease-out,
+    border-color 0.2s ease-out,
+    opacity 0.2s ease-out;
 }
 
 .file-button {
-  position: relative;
   overflow: hidden;
-  background: white;
   cursor: pointer;
 }
 
@@ -98,13 +149,21 @@ button {
 }
 
 button {
-  background: var(--accent);
-  color: white;
   cursor: pointer;
 }
 
+button:focus-visible,
+.file-button:focus-within {
+  border-color: var(--color-primary);
+  background-color: #fff;
+  color: var(--color-primary);
+}
+
+.file-button:hover,
 button:hover:not(:disabled) {
-  background: var(--accent-dark);
+  background-color: #fff;
+  border-color: var(--color-primary);
+  color: var(--color-primary);
 }
 
 button:disabled {
@@ -115,6 +174,71 @@ button:disabled {
 .status {
   margin: 14px 0 0;
   color: var(--muted);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.status[hidden] {
+  display: none !important;
+}
+
+.status-summary {
+  color: var(--muted);
+}
+
+.status-counts {
+  color: var(--muted);
+}
+
+.status-counts.has-warnings {
+  color: #b86a14;
+  font-weight: 700;
+}
+
+.status-counts.has-errors {
+  color: #b11f1f;
+  font-weight: 700;
+}
+
+.drop-overlay[hidden] {
+  display: none !important;
+}
+
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: grid;
+  place-items: center;
+  background: rgba(31, 27, 24, 0.28);
+  backdrop-filter: blur(2px);
+}
+
+.drop-overlay-panel {
+  min-width: min(640px, calc(100vw - 48px));
+  min-height: 220px;
+  padding: 28px;
+  border: 3px dashed rgba(255, 255, 255, 0.88);
+  border-radius: 24px;
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  color: white;
+  background: rgba(209, 101, 47, 0.14);
+}
+
+.drop-overlay-plus {
+  font-size: 88px;
+  line-height: 1;
+  font-weight: 700;
+}
+
+.drop-overlay-text {
+  font-size: 24px;
+  font-weight: 700;
 }
 
 .workspace {
@@ -149,25 +273,52 @@ button:disabled {
   width: 100%;
   min-width: 1024px;
   height: 576px;
-  display: grid;
-  place-items: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   overflow: hidden;
 }
 
 .preview-surface {
+  position: relative;
   display: grid;
   place-items: center;
-  border: 1px solid rgba(31, 27, 24, 0.3);
-  background: white;
-  transform-origin: center center;
-  transition: transform 120ms ease-out;
   flex: 0 0 auto;
 }
 
-.preview-surface svg {
+.preview-background,
+.preview-frame-line {
+  position: absolute;
+  inset: 0;
+}
+
+.preview-background {
+  background-color: #d7d7d7;
+  background-image:
+    linear-gradient(45deg, #bdbdbd 25%, transparent 25%),
+    linear-gradient(-45deg, #bdbdbd 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #bdbdbd 75%),
+    linear-gradient(-45deg, transparent 75%, #bdbdbd 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+.preview-frame-line {
+  box-shadow: 0 0 0 1px #000;
+  pointer-events: none;
+}
+
+.preview-content {
+  position: relative;
+  display: grid;
+  place-items: center;
+  background: transparent;
+}
+
+.preview-content svg {
   display: block;
-  max-width: 100%;
-  max-height: 100%;
+  width: 100%;
+  height: 100%;
 }
 
 .preview-toolbar {
@@ -230,6 +381,34 @@ button:disabled {
   padding: 10px 12px;
 }
 
+.icon-button {
+  gap: 8px;
+}
+
+.icon-only-button {
+  min-width: 2.5em;
+  width: 2.5em;
+  padding: 0;
+}
+
+.button-icon {
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 20px;
+  max-height: 20px;
+  flex: 0 0 auto;
+  filter: brightness(0) invert(1);
+  transition: filter 0.2s ease-out;
+}
+
+.file-button:hover .button-icon,
+.file-button:focus-within .button-icon,
+button:hover:not(:disabled) .button-icon,
+button:focus-visible .button-icon {
+  filter: none;
+}
+
 .properties-panel {
   display: grid;
   gap: 14px;
@@ -254,25 +433,18 @@ button:disabled {
   font-size: 19px;
 }
 
-.summary,
 .recent-header p,
 .saved-output {
   margin: 0;
   color: var(--muted);
 }
 
-.summary-actions,
 .property-actions {
   display: flex;
   gap: 10px;
   flex-wrap: wrap;
   align-items: center;
   margin-top: 14px;
-}
-
-.issue-counts {
-  color: var(--muted);
-  font-weight: 700;
 }
 
 .field {
@@ -308,7 +480,7 @@ button:disabled {
 
 .output-json {
   margin: 0;
-  max-height: 340px;
+  max-height: 150px;
   overflow: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;

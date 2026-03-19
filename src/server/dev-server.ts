@@ -10,6 +10,7 @@ const host = "127.0.0.1";
 const port = Number.parseInt(process.env.PORT ?? "4173", 10);
 const rootDir = resolve(process.cwd());
 const webDir = resolve(rootDir, "src", "web");
+const iconsDir = resolve(webDir, "icons");
 const outDir = resolve(rootDir, "out", "manual");
 const fixturesOutDir = resolve(rootDir, "out");
 const lottiePlayerPath = resolve(rootDir, "node_modules", "lottie-web", "build", "player", "lottie.min.js");
@@ -17,6 +18,7 @@ const lottiePlayerPath = resolve(rootDir, "node_modules", "lottie-web", "build",
 const staticFiles = new Map<string, { path: string; contentType: string }>([
   ["/", { path: resolve(webDir, "index.html"), contentType: "text/html; charset=utf-8" }],
   ["/app.js", { path: resolve(webDir, "app.js"), contentType: "text/javascript; charset=utf-8" }],
+  ["/build-info.js", { path: resolve(webDir, "build-info.js"), contentType: "text/javascript; charset=utf-8" }],
   ["/styles.css", { path: resolve(webDir, "styles.css"), contentType: "text/css; charset=utf-8" }],
   ["/fixtures", { path: resolve(webDir, "fixtures.html"), contentType: "text/html; charset=utf-8" }],
   ["/fixtures/", { path: resolve(webDir, "fixtures.html"), contentType: "text/html; charset=utf-8" }],
@@ -63,6 +65,10 @@ createServer(async (request, response) => {
     }
 
     if (request.method === "GET") {
+      if (serveIconAsset(url.pathname, response)) {
+        return;
+      }
+
       if (serveStatic(url.pathname, response)) {
         return;
       }
@@ -89,6 +95,53 @@ function serveStatic(pathname: string, response: ServerResponse): boolean {
   response.writeHead(200, { "content-type": file.contentType });
   response.end(readFileSync(file.path));
   return true;
+}
+
+function serveIconAsset(pathname: string, response: ServerResponse): boolean {
+  if (!pathname.startsWith("/icons/")) {
+    return false;
+  }
+
+  const relativePath = pathname.slice("/icons/".length).replaceAll("\\", "/");
+  if (!relativePath || relativePath.includes("..")) {
+    return false;
+  }
+
+  const assetPath = resolve(iconsDir, relativePath);
+  if (!assetPath.startsWith(iconsDir)) {
+    return false;
+  }
+
+  try {
+    if (!statSync(assetPath).isFile()) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+
+  response.writeHead(200, { "content-type": inferContentType(assetPath) });
+  response.end(readFileSync(assetPath));
+  return true;
+}
+
+function inferContentType(path: string): string {
+  const extension = extname(path).toLowerCase();
+  switch (extension) {
+    case ".svg":
+      return "image/svg+xml; charset=utf-8";
+    case ".json":
+      return "application/json; charset=utf-8";
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".gif":
+      return "image/gif";
+    default:
+      return "application/octet-stream";
+  }
 }
 
 async function handleConvertRequest(
