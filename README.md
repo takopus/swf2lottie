@@ -17,16 +17,20 @@ The project is intentionally narrow:
 
 ## Architecture
 
-The project is written on TypeScript over Node.
+The converter core is written in TypeScript and can now run in two ways:
+
+- locally in Node for fixture export and development tooling;
+- in the browser through a bundled `Web Worker`, which is the path used by the current UI and static build.
+
 The codebase is split into small layers:
 
 - `src/core/swf`: binary reader and SWF parsing entrypoints;
 - `src/core/ir`: intermediate representation for Flash timeline data;
 - `src/core/validate`: subset validation and diagnostics;
 - `src/core/export-lottie`: deterministic Lottie export from validated IR;
-- `src/core/convert.ts`: orchestration entrypoint used by the preview server and fixture export scripts;
-- `src/server`: minimal local HTTP server for preview and fixture gallery;
-- `src/web`: minimal browser UI for manual conversion and inspection.
+- `src/core/convert.ts`: orchestration entrypoint used by both Node-side export scripts and browser-side worker conversion;
+- `src/server`: minimal local HTTP server for preview and fixture galleries;
+- `src/web`: browser UI, fixture galleries and the conversion worker entrypoint.
 
 ## Status
 
@@ -104,13 +108,34 @@ The page provides:
 - an embedded `Lottie` preview area;
 - a short issue list if conversion returns warnings or errors.
 
-Each browser conversion also writes files to `out/manual/`:
+The current browser UI performs conversion client-side through a bundled worker. Saving is browser-side too; it no longer depends on the preview server.
 
-- `*.json` for the generated `Lottie`;
-- `*.meta.json` for source filename and issues;
-- `*.error.json` if conversion fails.
+There is also a fixture comparison gallery at `http://127.0.0.1:4173/fixtures`:
 
-There is also a fixture gallery at `http://127.0.0.1:4173/fixtures` which shows exported fixture JSON files in embedded `Lottie` players, activating on mouse over, in reverse date order, newest to oldest.
+- left column: `out/` exported through the Node path;
+- right column: `out-web/` exported through the browser-bundled path.
+
+The gallery is useful for checking whether both execution modes produce matching output.
+
+## Static build
+
+To build the static app:
+
+```bash
+npm run build:static
+```
+
+This writes a self-contained static site into `dist-static/`.
+
+To preview exactly that static build locally:
+
+```bash
+npm run preview:static
+```
+
+Then open `http://127.0.0.1:4174`.
+
+The static build is intended to be served over ordinary HTTP by any simple static web server. It should not be opened directly via `file://`.
 
 ## Exporting fixture output
 
@@ -136,6 +161,20 @@ or the short numeric form:
 ```bash
 npm run export:fixture -- 16
 ```
+
+To export the same fixture set through the browser-bundled execution path, use:
+
+```bash
+npm run export:fixtures:web
+```
+
+or for one fixture:
+
+```bash
+npm run export:fixture:web -- 16
+```
+
+This writes the browser-path results to `out-web/`.
 
 ## Known limitation
 

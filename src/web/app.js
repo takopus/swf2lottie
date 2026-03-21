@@ -1,4 +1,4 @@
-import { BUILD_LABEL } from "./build-info.js";
+import { BUILD_LABEL, BUILD_STAMP } from "./build-info.js";
 
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 24;
@@ -81,6 +81,9 @@ let currentFrame = 0;
 let isPlaying = false;
 let dragDepth = 0;
 let isAboutOpen = false;
+let convertWorker = null;
+let convertRequestId = 0;
+const pendingConvertRequests = new Map();
 
 window.addEventListener("pageshow", () => {
   clearWorkspace();
@@ -144,16 +147,8 @@ async function convertSelectedFile() {
   setStatusMessage(`Converting ${selectedFile.name}...`);
 
   try {
-    const response = await fetch(`/api/convert?filename=${encodeURIComponent(selectedFile.name)}`, {
-      method: "POST",
-      body: await selectedFile.arrayBuffer(),
-      headers: {
-        "content-type": "application/octet-stream"
-      }
-    });
-
-    const payload = await response.json();
-    if (!response.ok || !payload.ok || !payload.animation) {
+    const payload = await convertSelectedFileInWorker(selectedFile);
+    if (!payload.ok || !payload.animation) {
       destroyPreviewAnimation();
       outputPanel.hidden = true;
       setStatusMessage(payload.message ?? "Conversion failed.", "error");
@@ -170,6 +165,62 @@ async function convertSelectedFile() {
     clearWorkspace();
     setStatusMessage(error instanceof Error ? error.message : "Conversion failed.", "error");
   }
+}
+
+function getConvertWorker() {
+  if (!(convertWorker instanceof Worker)) {
+    convertWorker = new Worker(`./convert-worker.js?build=${encodeURIComponent(BUILD_STAMP)}`, { type: "module" });
+    convertWorker.addEventListener("message", handleConvertWorkerMessage);
+    convertWorker.addEventListener("error", (event) => {
+      const error = event.error instanceof Error
+        ? event.error
+        : new Error(event.message || "Worker conversion failed.");
+      rejectAllPendingConvertRequests(error);
+    });
+  }
+
+  return convertWorker;
+}
+
+async function convertSelectedFileInWorker(file) {
+  const worker = getConvertWorker();
+  const requestId = ++convertRequestId;
+  const buffer = await file.arrayBuffer();
+
+  return await new Promise((resolve, reject) => {
+    pendingConvertRequests.set(requestId, { resolve, reject });
+    worker.postMessage(
+      {
+        type: "convert",
+        requestId,
+        filename: file.name,
+        buffer
+      },
+      [buffer]
+    );
+  });
+}
+
+function handleConvertWorkerMessage(event) {
+  const payload = event.data;
+  if (!payload || payload.type !== "result") {
+    return;
+  }
+
+  const pendingRequest = pendingConvertRequests.get(payload.requestId);
+  if (!pendingRequest) {
+    return;
+  }
+
+  pendingConvertRequests.delete(payload.requestId);
+  pendingRequest.resolve(payload);
+}
+
+function rejectAllPendingConvertRequests(error) {
+  for (const pendingRequest of pendingConvertRequests.values()) {
+    pendingRequest.reject(error);
+  }
+  pendingConvertRequests.clear();
 }
 
 function onDragEnter(event) {
@@ -358,7 +409,7 @@ function renderWorkspace() {
   }
 
   workspace.hidden = false;
-  outputJson.textContent = JSON.stringify(currentWorkingAnimation, null, 2);
+  outputJson.textContent = JSON.stringify(createSerializableAnimation() ?? currentWorkingAnimation, null, 2);
   fpsInput.value = formatNumber(currentWorkingAnimation.fr);
   widthInput.value = String(currentWorkingAnimation.w);
   heightInput.value = String(currentWorkingAnimation.h);
@@ -392,9 +443,23 @@ function renderStatus() {
   syncWorkspaceHeight();
 }
 
+function createSerializableAnimation() {
+  if (!currentWorkingAnimation) {
+    return null;
+  }
+
+  const sourceAnimation = currentBaseAnimation ?? currentWorkingAnimation;
+  const serializableAnimation = structuredClone(sourceAnimation);
+  serializableAnimation.fr = currentWorkingAnimation.fr;
+  serializableAnimation.w = currentWorkingAnimation.w;
+  serializableAnimation.h = currentWorkingAnimation.h;
+  return serializableAnimation;
+}
+
 function renderPreviewAnimation() {
   destroyPreviewAnimation();
-  if (!currentWorkingAnimation) {
+  const previewAnimationData = createSerializableAnimation();
+  if (!previewAnimationData) {
     return;
   }
 
@@ -403,7 +468,7 @@ function renderPreviewAnimation() {
     renderer: "svg",
     loop: true,
     autoplay: false,
-    animationData: currentWorkingAnimation
+    animationData: previewAnimationData
   });
 
   currentAnimationInstance.addEventListener("DOMLoaded", () => {
@@ -582,7 +647,7 @@ function syncToolbarPlayIcon(playing) {
   if (!(toolbarPlayIcon instanceof HTMLImageElement)) {
     return;
   }
-  toolbarPlayIcon.src = playing ? "/icons/pause.svg" : "/icons/play.svg";
+  toolbarPlayIcon.src = playing ? "./icons/pause.svg" : "./icons/play.svg";
 }
 
 function setWorkspaceControlsDisabled(disabled) {
@@ -624,7 +689,7 @@ function applyPreviewEdits() {
   };
 
   updatePreviewButton.disabled = true;
-  outputJson.textContent = JSON.stringify(currentWorkingAnimation, null, 2);
+  outputJson.textContent = JSON.stringify(createSerializableAnimation() ?? currentWorkingAnimation, null, 2);
   renderStatus();
   updateStageSize();
   syncFrameSlider();
@@ -636,12 +701,17 @@ async function saveCurrentAnimation() {
     return;
   }
 
+  const serializableAnimation = createSerializableAnimation();
+  if (!serializableAnimation) {
+    return;
+  }
+
   const filename = toJsonFilename(currentSourceName ?? `saved-${Date.now()}.json`);
   const bitmapStorageMode = currentBitmapAssets.length > 0 ? bitmapStorageInput.value : "inline";
   const savePackage = bitmapStorageMode === "external"
-    ? createExternalBitmapSavePackage(currentWorkingAnimation, currentBitmapAssets, filename)
+    ? createExternalBitmapSavePackage(serializableAnimation, currentBitmapAssets, filename)
     : {
-        animation: structuredClone(currentWorkingAnimation),
+        animation: serializableAnimation,
         externalAssets: []
       };
   const payloadText = JSON.stringify(savePackage.animation, null, 2);
@@ -674,32 +744,6 @@ async function saveCurrentAnimation() {
   renderRecentGrid();
 
   if (saveResult.cancelled) {
-    return;
-  }
-
-  try {
-    const response = await fetch(
-      `/api/save-json?filename=${encodeURIComponent(savedFilename)}&source=${encodeURIComponent(currentSourceName ?? savedFilename)}&issues=${encodeURIComponent(JSON.stringify(currentIssues))}`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({
-          animation: savePackage.animation,
-          externalAssets: savePackage.externalAssets
-        })
-      }
-    );
-
-    const payload = await response.json();
-    if (!response.ok || !payload.ok) {
-      return;
-    }
-
-    record.size = payload.size ?? record.size;
-    renderRecentGrid();
-  } catch (error) {
     return;
   }
 }

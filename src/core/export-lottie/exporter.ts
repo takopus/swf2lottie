@@ -703,7 +703,7 @@ function findStaticMorphSuccessorShape(
 
   for (let frameIndex = track.lastFrame + 1; frameIndex < timeline.frames.length; frameIndex += 1) {
     const frame = timeline.frames[frameIndex];
-    const successor = frame?.displayList.find((instance) => instance.depth === currentSample.depth);
+    const successor = frame?.displayList.find((instance) => instance.id === currentSample.id);
     if (!successor) {
       continue;
     }
@@ -722,25 +722,6 @@ function findStaticMorphSuccessorShape(
     }
 
     return successorSymbol;
-  }
-
-  for (let frameIndex = track.lastFrame + 1; frameIndex < timeline.frames.length; frameIndex += 1) {
-    const frame = timeline.frames[frameIndex];
-    if (!frame || frame.displayList.length === 0) {
-      continue;
-    }
-
-    const shapeSymbols = frame.displayList
-      .map((instance) => symbolMap.get(instance.symbolId))
-      .filter((symbol): symbol is FlashShapeSymbol => symbol?.kind === "shape");
-
-    if (shapeSymbols.length === 1) {
-      return shapeSymbols[0] ?? null;
-    }
-
-    if (shapeSymbols.length > 1) {
-      return null;
-    }
   }
 
   return null;
@@ -1101,10 +1082,6 @@ function exportStaticMorphProxyShapes(
     const matchedMorphStrokeGroup = group.stroke
       ? findBestMatchingMorphGroupForProxy(group, morphStrokeGroups)
       : null;
-
-    if ((group.fill && !matchedMorphFillGroup) || (group.stroke && !matchedMorphStrokeGroup)) {
-      continue;
-    }
 
     const items: Record<string, unknown>[] = group.paths.map((path) =>
       sourceSamples && needsBakedMatrix(sourceSamples)

@@ -6,11 +6,15 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "build:static": "node --import tsx scripts/build-static.ts",
     "check": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json",
     "preview": "node --import tsx src/server/dev-server.ts",
+    "preview:static": "node --import tsx scripts/preview-static.ts",
     "test": "vitest run",
     "export:fixtures": "node --import tsx scripts/export-fixtures.ts",
-    "export:fixture": "node --import tsx scripts/export-fixtures.ts"
+    "export:fixture": "node --import tsx scripts/export-fixtures.ts",
+    "export:fixtures:web": "node --import tsx scripts/export-fixtures-web.ts",
+    "export:fixture:web": "node --import tsx scripts/export-fixtures-web.ts"
   },
   "engines": {
     "node": ">=20"

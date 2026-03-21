@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, resolve } from "node:path";
 
+import { buildWebWorkerBundle, webBundleDirName } from "./build-web-worker.js";
 import { convertSwfToLottie } from "../core/convert.js";
 import { ConversionError } from "../core/issues.js";
 import type { ExportedBitmapAsset } from "../core/export-lottie/types.js";
@@ -11,23 +12,31 @@ const port = Number.parseInt(process.env.PORT ?? "4173", 10);
 const rootDir = resolve(process.cwd());
 const webDir = resolve(rootDir, "src", "web");
 const iconsDir = resolve(webDir, "icons");
+const webBundleDir = resolve(rootDir, webBundleDirName);
 const outDir = resolve(rootDir, "out", "manual");
 const fixturesOutDir = resolve(rootDir, "out");
+const fixturesWebOutDir = resolve(rootDir, "out-web");
 const lottiePlayerPath = resolve(rootDir, "node_modules", "lottie-web", "build", "player", "lottie.min.js");
 
 const staticFiles = new Map<string, { path: string; contentType: string }>([
   ["/", { path: resolve(webDir, "index.html"), contentType: "text/html; charset=utf-8" }],
   ["/app.js", { path: resolve(webDir, "app.js"), contentType: "text/javascript; charset=utf-8" }],
   ["/build-info.js", { path: resolve(webDir, "build-info.js"), contentType: "text/javascript; charset=utf-8" }],
+  ["/convert-worker.js", { path: resolve(webBundleDir, "convert-worker.js"), contentType: "text/javascript; charset=utf-8" }],
+  ["/convert-worker.js.map", { path: resolve(webBundleDir, "convert-worker.js.map"), contentType: "application/json; charset=utf-8" }],
   ["/styles.css", { path: resolve(webDir, "styles.css"), contentType: "text/css; charset=utf-8" }],
   ["/fixtures", { path: resolve(webDir, "fixtures.html"), contentType: "text/html; charset=utf-8" }],
   ["/fixtures/", { path: resolve(webDir, "fixtures.html"), contentType: "text/html; charset=utf-8" }],
   ["/fixtures.js", { path: resolve(webDir, "fixtures.js"), contentType: "text/javascript; charset=utf-8" }],
+  ["/fixtures-web", { path: resolve(webDir, "fixtures-web.html"), contentType: "text/html; charset=utf-8" }],
+  ["/fixtures-web/", { path: resolve(webDir, "fixtures-web.html"), contentType: "text/html; charset=utf-8" }],
+  ["/fixtures-web.js", { path: resolve(webDir, "fixtures-web.js"), contentType: "text/javascript; charset=utf-8" }],
   ["/fixtures.css", { path: resolve(webDir, "fixtures.css"), contentType: "text/css; charset=utf-8" }],
   ["/vendor/lottie.min.js", { path: lottiePlayerPath, contentType: "text/javascript; charset=utf-8" }]
 ]);
 
 mkdirSync(outDir, { recursive: true });
+await buildWebWorkerBundle(rootDir);
 
 createServer(async (request, response) => {
   try {
@@ -45,14 +54,14 @@ createServer(async (request, response) => {
 
     if (request.method === "GET" && url.pathname === "/api/fixtures") {
       sendJson(response, 200, {
-        fixtures: listExportedFixtures()
+        fixtures: listExportedFixtures(fixturesOutDir, "/api/fixture-json/")
       });
       return;
     }
 
     if (request.method === "GET" && url.pathname.startsWith("/api/fixture-json/")) {
       const filename = decodeURIComponent(url.pathname.slice("/api/fixture-json/".length));
-      const safeName = sanitizeFixtureJsonName(filename);
+      const safeName = sanitizeFixtureJsonName(filename, fixturesOutDir);
 
       if (!safeName) {
         sendJson(response, 404, { message: "Fixture JSON not found." });
@@ -61,6 +70,27 @@ createServer(async (request, response) => {
 
       response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
       response.end(readFileSync(resolve(fixturesOutDir, safeName)));
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/fixtures-web") {
+      sendJson(response, 200, {
+        fixtures: listExportedFixtures(fixturesWebOutDir, "/api/fixture-web-json/")
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname.startsWith("/api/fixture-web-json/")) {
+      const filename = decodeURIComponent(url.pathname.slice("/api/fixture-web-json/".length));
+      const safeName = sanitizeFixtureJsonName(filename, fixturesWebOutDir);
+
+      if (!safeName) {
+        sendJson(response, 404, { message: "Browser fixture JSON not found." });
+        return;
+      }
+
+      response.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+      response.end(readFileSync(resolve(fixturesWebOutDir, safeName)));
       return;
     }
 
@@ -128,6 +158,10 @@ function serveIconAsset(pathname: string, response: ServerResponse): boolean {
 function inferContentType(path: string): string {
   const extension = extname(path).toLowerCase();
   switch (extension) {
+    case ".js":
+      return "text/javascript; charset=utf-8";
+    case ".map":
+      return "application/json; charset=utf-8";
     case ".svg":
       return "image/svg+xml; charset=utf-8";
     case ".json":
@@ -298,7 +332,7 @@ function sanitizeJsonFilename(filename: string): string {
   return cleaned.toLowerCase().endsWith(".json") ? cleaned : `${cleaned}.json`;
 }
 
-function sanitizeFixtureJsonName(filename: string): string | null {
+function sanitizeFixtureJsonName(filename: string, baseDir: string): string | null {
   const cleaned = filename.replace(/[^A-Za-z0-9._-]/g, "_");
   if (
     !cleaned.toLowerCase().endsWith(".json") ||
@@ -308,7 +342,7 @@ function sanitizeFixtureJsonName(filename: string): string | null {
     return null;
   }
 
-  const absolutePath = resolve(fixturesOutDir, cleaned);
+  const absolutePath = resolve(baseDir, cleaned);
   try {
     if (!statSync(absolutePath).isFile()) {
       return null;
@@ -376,19 +410,22 @@ function isExportedBitmapAsset(value: unknown): value is ExportedBitmapAsset {
     typeof candidate.symbolId === "string";
 }
 
-function listExportedFixtures(): Array<{ name: string; size: number; href: string }> {
-  return readdirSync(fixturesOutDir, { withFileTypes: true })
+function listExportedFixtures(
+  sourceDir: string,
+  hrefPrefix: string
+): Array<{ name: string; size: number; href: string }> {
+  return readdirSync(sourceDir, { withFileTypes: true })
     .filter((entry) => entry.isFile())
     .map((entry) => entry.name)
     .filter((name) => name.toLowerCase().endsWith(".json"))
     .filter((name) => !name.toLowerCase().endsWith(".meta.json"))
     .filter((name) => !name.toLowerCase().endsWith(".error.json"))
     .map((name) => {
-      const absolutePath = resolve(fixturesOutDir, name);
+      const absolutePath = resolve(sourceDir, name);
       return {
         name,
         size: statSync(absolutePath).size,
-        href: `/api/fixture-json/${encodeURIComponent(name)}`
+        href: `${hrefPrefix}${encodeURIComponent(name)}`
       };
     })
     .sort(compareFixtureExports);

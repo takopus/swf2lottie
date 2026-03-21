@@ -1,4 +1,4 @@
-import { inflateSync } from "node:zlib";
+import { unzlibSync } from "fflate";
 
 import { ConversionError, type ConversionIssue } from "../issues.js";
 import type { ParsedSwfHeader } from "./types.js";
@@ -24,7 +24,7 @@ export function getUncompressedSwfBuffer(
 
   try {
     const compressedBody = new Uint8Array(buffer, 8);
-    const inflatedBody = inflateSync(compressedBody);
+    const inflatedBody = unzlibSync(compressedBody);
     const output = new Uint8Array(header.fileLength);
 
     output[0] = 0x46;
