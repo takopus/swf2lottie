@@ -1,4 +1,5 @@
 import { BUILD_LABEL } from "./build-info.js";
+import { prepareAnimationForLottieWeb } from "./lottie-preview-normalize.js";
 
 const gallery = document.getElementById("gallery");
 const buildBadge = document.getElementById("build-badge");
@@ -67,7 +68,7 @@ async function createFixtureCard(fixture) {
     renderer: "svg",
     loop: true,
     autoplay: false,
-    animationData
+    animationData: prepareAnimationForLottieWeb(animationData)
   });
 
   animation.addEventListener("DOMLoaded", () => {

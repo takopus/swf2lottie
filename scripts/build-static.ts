@@ -28,6 +28,7 @@ export async function buildStaticSite(): Promise<void> {
   copyWebFile("index.html");
   copyWebFile("app.js");
   copyWebFile("build-info.js");
+  copyWebFile("lottie-preview-normalize.js");
   copyWebFile("styles.css");
   copyWebFile("fixtures.html");
   copyWebFile("fixtures.js");

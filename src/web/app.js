@@ -1,4 +1,5 @@
 import { BUILD_LABEL, BUILD_STAMP } from "./build-info.js";
+import { prepareAnimationForLottieWeb } from "./lottie-preview-normalize.js";
 
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 24;
@@ -468,7 +469,7 @@ function renderPreviewAnimation() {
     renderer: "svg",
     loop: true,
     autoplay: false,
-    animationData: previewAnimationData
+    animationData: prepareAnimationForLottieWeb(previewAnimationData)
   });
 
   currentAnimationInstance.addEventListener("DOMLoaded", () => {
@@ -768,7 +769,7 @@ function renderRecentGrid() {
       renderer: "svg",
       loop: true,
       autoplay: false,
-      animationData: entry.animation
+      animationData: prepareAnimationForLottieWeb(entry.animation)
     });
 
     animation.addEventListener("DOMLoaded", () => {
