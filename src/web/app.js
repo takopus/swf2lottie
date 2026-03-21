@@ -5,9 +5,13 @@ const MAX_ZOOM = 24;
 const ZOOM_STEP_FACTOR = 1.25;
 
 const fileInput = document.getElementById("file-input");
+const appShell = document.querySelector(".app-shell");
 const buildBadge = document.getElementById("build-badge");
 const topbar = document.getElementById("topbar");
 const status = document.getElementById("status");
+const aboutButton = document.getElementById("about-button");
+const aboutOverlay = document.getElementById("about-overlay");
+const aboutCloseButton = document.getElementById("about-close");
 const workspace = document.getElementById("workspace");
 const dropOverlay = document.getElementById("drop-overlay");
 const previewStage = document.getElementById("preview-stage");
@@ -38,6 +42,7 @@ const saveJsonButton = document.getElementById("save-json");
 const recentScrollLeftButton = document.getElementById("recent-scroll-left");
 const recentScrollRightButton = document.getElementById("recent-scroll-right");
 const recentGrid = document.getElementById("recent-grid");
+const recentPanel = document.querySelector(".recent-panel");
 
 if (buildBadge) {
   buildBadge.textContent = BUILD_LABEL;
@@ -45,6 +50,24 @@ if (buildBadge) {
 
 const recentEntries = [];
 const recentCardAnimations = [];
+const previewControls = [
+  toolbarPlay,
+  firstFrameButton,
+  prevFrameButton,
+  nextFrameButton,
+  lastFrameButton,
+  frameSlider,
+  frameInput,
+  zoomInButton,
+  zoomOutButton,
+  zoomFitButton,
+  zoomResetButton
+];
+const propertyInputs = [
+  fpsInput,
+  widthInput,
+  heightInput
+];
 
 let selectedFile = null;
 let currentAnimationInstance = null;
@@ -57,11 +80,21 @@ let currentZoom = 1;
 let currentFrame = 0;
 let isPlaying = false;
 let dragDepth = 0;
+let isAboutOpen = false;
 
 window.addEventListener("pageshow", () => {
   clearWorkspace();
+  syncWorkspaceHeight();
 });
-window.addEventListener("resize", updateRecentScrollButtons);
+window.addEventListener("resize", () => {
+  updateRecentScrollButtons();
+  syncWorkspaceHeight();
+});
+window.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && isAboutOpen) {
+    closeAbout();
+  }
+});
 
 fileInput.addEventListener("change", () => {
   const nextFile = fileInput.files?.[0] ?? null;
@@ -73,6 +106,13 @@ topbar.addEventListener("dragenter", onDragEnter);
 topbar.addEventListener("dragover", onDragOver);
 topbar.addEventListener("dragleave", onDragLeave);
 topbar.addEventListener("drop", onDrop);
+aboutButton.addEventListener("click", openAbout);
+aboutCloseButton.addEventListener("click", closeAbout);
+aboutOverlay.addEventListener("click", (event) => {
+  if (event.target === aboutOverlay) {
+    closeAbout();
+  }
+});
 
 window.addEventListener("dragenter", onDragEnter);
 window.addEventListener("dragover", onDragOver);
@@ -115,7 +155,6 @@ async function convertSelectedFile() {
     const payload = await response.json();
     if (!response.ok || !payload.ok || !payload.animation) {
       destroyPreviewAnimation();
-      workspace.hidden = true;
       outputPanel.hidden = true;
       setStatusMessage(payload.message ?? "Conversion failed.", "error");
       return;
@@ -134,6 +173,10 @@ async function convertSelectedFile() {
 }
 
 function onDragEnter(event) {
+  if (isAboutOpen) {
+    return;
+  }
+
   if (!containsFiles(event)) {
     return;
   }
@@ -144,6 +187,10 @@ function onDragEnter(event) {
 }
 
 function onDragOver(event) {
+  if (isAboutOpen) {
+    return;
+  }
+
   if (!containsFiles(event)) {
     return;
   }
@@ -154,6 +201,10 @@ function onDragOver(event) {
 }
 
 function onDragLeave(event) {
+  if (isAboutOpen) {
+    return;
+  }
+
   if (!containsFiles(event)) {
     return;
   }
@@ -166,6 +217,10 @@ function onDragLeave(event) {
 }
 
 function onDrop(event) {
+  if (isAboutOpen) {
+    return;
+  }
+
   if (!containsFiles(event)) {
     return;
   }
@@ -183,6 +238,20 @@ function onDrop(event) {
 function setDropUi(active) {
   topbar.classList.toggle("is-drop-target", active);
   dropOverlay.hidden = !active;
+}
+
+function openAbout() {
+  isAboutOpen = true;
+  dragDepth = 0;
+  setDropUi(false);
+  aboutOverlay.hidden = false;
+  document.body.classList.add("about-open");
+}
+
+function closeAbout() {
+  isAboutOpen = false;
+  aboutOverlay.hidden = true;
+  document.body.classList.remove("about-open");
 }
 
 function containsFiles(event) {
@@ -249,19 +318,14 @@ function clearWorkspace() {
   isPlaying = false;
   dragDepth = 0;
   setDropUi(false);
-  workspace.hidden = true;
+  workspace.hidden = false;
   outputPanel.hidden = true;
   outputJson.textContent = "";
-  if (bitmapStorageField) {
-    bitmapStorageField.hidden = false;
-  }
   bitmapStorageInput.value = "inline";
-  bitmapStorageInput.disabled = true;
   fpsInput.value = "";
   widthInput.value = "";
   heightInput.value = "";
-  updatePreviewButton.disabled = true;
-  saveJsonButton.disabled = true;
+  setWorkspaceControlsDisabled(true);
   status.hidden = true;
   status.textContent = "";
   frameSlider.min = "0";
@@ -282,6 +346,7 @@ function clearWorkspace() {
   }
   preview.style.width = "";
   preview.style.height = "";
+  syncWorkspaceHeight();
 }
 
 syncToolbarPlayIcon(false);
@@ -297,16 +362,14 @@ function renderWorkspace() {
   fpsInput.value = formatNumber(currentWorkingAnimation.fr);
   widthInput.value = String(currentWorkingAnimation.w);
   heightInput.value = String(currentWorkingAnimation.h);
-  if (bitmapStorageField) {
-    bitmapStorageField.hidden = false;
-  }
+  setWorkspaceControlsDisabled(false);
   bitmapStorageInput.disabled = currentBitmapAssets.length === 0;
   updatePreviewButton.disabled = true;
-  saveJsonButton.disabled = false;
   renderStatus();
   updateStageSize();
   syncFrameSlider();
   renderPreviewAnimation();
+  syncWorkspaceHeight();
 }
 
 function renderStatus() {
@@ -326,6 +389,7 @@ function renderStatus() {
   `;
   outputPanel.hidden = !hasIssues;
   outputJson.textContent = hasIssues ? formatIssues(currentIssues) : "";
+  syncWorkspaceHeight();
 }
 
 function renderPreviewAnimation() {
@@ -521,6 +585,20 @@ function syncToolbarPlayIcon(playing) {
   toolbarPlayIcon.src = playing ? "/icons/pause.svg" : "/icons/play.svg";
 }
 
+function setWorkspaceControlsDisabled(disabled) {
+  for (const control of previewControls) {
+    control.disabled = disabled;
+  }
+
+  for (const input of propertyInputs) {
+    input.disabled = disabled;
+  }
+
+  bitmapStorageInput.disabled = disabled;
+  updatePreviewButton.disabled = true;
+  saveJsonButton.disabled = disabled;
+}
+
 function markDirty() {
   if (!currentWorkingAnimation) {
     return;
@@ -684,6 +762,32 @@ function updateRecentScrollButtons() {
 
   recentScrollLeftButton.disabled = atStart;
   recentScrollRightButton.disabled = atEnd || maxScrollLeft <= 1;
+}
+
+function syncWorkspaceHeight() {
+  if (!(appShell instanceof HTMLElement) || !(recentPanel instanceof HTMLElement)) {
+    return;
+  }
+
+  if (window.innerWidth <= 980) {
+    workspace.style.height = "";
+    return;
+  }
+
+  const shellStyles = window.getComputedStyle(appShell);
+  const bodyStyles = window.getComputedStyle(document.body);
+  const shellGap = Number.parseFloat(shellStyles.rowGap || shellStyles.gap || "0") || 0;
+  const bodyPaddingTop = Number.parseFloat(bodyStyles.paddingTop || "0") || 0;
+  const bodyPaddingBottom = Number.parseFloat(bodyStyles.paddingBottom || "0") || 0;
+  const availableHeight = window.innerHeight
+    - bodyPaddingTop
+    - bodyPaddingBottom
+    - topbar.offsetHeight
+    - (outputPanel.hidden ? 0 : outputPanel.offsetHeight)
+    - recentPanel.offsetHeight
+    - shellGap * 3;
+
+  workspace.style.height = `${Math.max(400, Math.floor(availableHeight))}px`;
 }
 
 function sanitizePositiveNumber(value, fallback) {

@@ -63,8 +63,11 @@ input[type="number"]::-webkit-inner-spin-button {
 
 .app-shell {
   width: min(1440px, calc(100% - 32px));
+  height: calc(100vh - 10px);
   margin: 0 auto;
   display: grid;
+  grid-template-rows: auto auto minmax(400px, 1fr) auto;
+  align-content: start;
   gap: 10px;
 }
 
@@ -83,6 +86,7 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .topbar {
+  position: relative;
   padding: 18px 20px;
   display: grid;
   place-items: center;
@@ -96,6 +100,12 @@ input[type="number"]::-webkit-inner-spin-button {
   align-items: center;
   flex-wrap: wrap;
   justify-content: center;
+}
+
+.about-button {
+  position: absolute;
+  right: 20px;
+  top: 18px;
 }
 
 .topbar.is-drop-target {
@@ -220,6 +230,46 @@ button:disabled {
   backdrop-filter: blur(2px);
 }
 
+.about-overlay[hidden] {
+  display: none !important;
+}
+
+.about-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1001;
+  display: grid;
+  padding: 20px;
+  background: rgba(31, 27, 24, 0.45);
+  backdrop-filter: blur(2px);
+}
+
+.about-dialog {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  padding: 24px;
+  border-radius: 5px;
+  background: var(--panel-bg);
+  box-shadow: var(--shadow);
+}
+
+.about-dialog h2 {
+  margin: 0;
+  font-size: 24px;
+}
+
+.about-close {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  min-width: 2.5em;
+  width: 2.5em;
+  padding: 0;
+}
+
 .drop-overlay-panel {
   min-width: min(640px, calc(100vw - 48px));
   min-height: 220px;
@@ -247,8 +297,10 @@ button:disabled {
 .workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 190px;
+  height: 100%;
+  min-height: 400px;
   gap: 18px;
-  align-items: start;
+  align-items: stretch;
   background: transparent;
   box-shadow: none;
   border: 0;
@@ -257,6 +309,8 @@ button:disabled {
 
 .preview-panel,
 .properties-panel {
+  height: 100%;
+  min-height: 0;
   border-radius: 5px;
   background: var(--panel-bg);
   box-shadow: var(--shadow);
@@ -268,28 +322,28 @@ button:disabled {
 }
 
 .preview-column {
+  height: 100%;
   min-width: 0;
   overflow-x: auto;
 }
 
 .preview-frame {
+  height: 100%;
   border-radius: 0px;
   background: var(--panel-bg);
   box-shadow: var(--shadow);
-  /* min-width: 1024px; */
-  min-height: 450px;
+  min-height: 400px;
   padding: 0px;
   border-radius: 0px;
-  display: grid;
-  justify-items: center;
-  align-content: start;
+  display: flex;
+  flex-direction: column;
   gap: 16px;
 }
 
 .preview-stage {
+  flex: 1 1 auto;
   width: 100%;
-  /* min-width: 1024px; */
-  height: 450px;
+  min-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -494,9 +548,10 @@ button:focus-visible .button-icon {
 }
 
 .properties-panel {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 14px;
-  padding: 16px 16px 7px 16px;
+  padding: 16px;
 }
 
 .properties-panel h2,
@@ -516,6 +571,16 @@ button:focus-visible .button-icon {
   flex-wrap: wrap;
   align-items: center;
   margin-bottom: 20px;
+}
+
+.properties-bottom {
+  margin-top: auto;
+  display: grid;
+  gap: 5px;
+}
+
+.property-actions-bottom {
+  margin-bottom: 0;
 }
 
 .field {
@@ -582,6 +647,7 @@ button:focus-visible .button-icon {
 }
 
 .recent-panel {
+  align-self: start;
   padding: 18px;
 }
 
@@ -649,7 +715,12 @@ button:focus-visible .button-icon {
   padding: 0;
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 980px) {
+  .app-shell {
+    height: auto;
+    grid-template-rows: auto auto auto auto;
+  }
+
   .workspace {
     grid-template-columns: 1fr;
   }
