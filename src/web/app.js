@@ -21,19 +21,22 @@ const nextFrameButton = document.getElementById("next-frame");
 const lastFrameButton = document.getElementById("last-frame");
 const frameSlider = document.getElementById("frame-slider");
 const frameInput = document.getElementById("frame-input");
+const frameTotal = document.getElementById("frame-total");
 const zoomInButton = document.getElementById("zoom-in");
 const zoomOutButton = document.getElementById("zoom-out");
 const zoomFitButton = document.getElementById("zoom-fit");
 const zoomResetButton = document.getElementById("zoom-reset");
 const outputPanel = document.getElementById("output-panel");
 const outputJson = document.getElementById("output-json");
+const bitmapStorageField = document.getElementById("bitmap-storage-field");
 const bitmapStorageInput = document.getElementById("bitmap-storage");
 const fpsInput = document.getElementById("fps-input");
 const widthInput = document.getElementById("width-input");
 const heightInput = document.getElementById("height-input");
 const updatePreviewButton = document.getElementById("update-preview");
 const saveJsonButton = document.getElementById("save-json");
-const savedOutput = document.getElementById("saved-output");
+const recentScrollLeftButton = document.getElementById("recent-scroll-left");
+const recentScrollRightButton = document.getElementById("recent-scroll-right");
 const recentGrid = document.getElementById("recent-grid");
 
 if (buildBadge) {
@@ -58,9 +61,11 @@ let dragDepth = 0;
 window.addEventListener("pageshow", () => {
   clearWorkspace();
 });
+window.addEventListener("resize", updateRecentScrollButtons);
 
 fileInput.addEventListener("change", () => {
   const nextFile = fileInput.files?.[0] ?? null;
+  fileInput.blur();
   void loadSelectedFile(nextFile);
 });
 
@@ -97,7 +102,6 @@ async function convertSelectedFile() {
   }
 
   setStatusMessage(`Converting ${selectedFile.name}...`);
-  savedOutput.hidden = true;
 
   try {
     const response = await fetch(`/api/convert?filename=${encodeURIComponent(selectedFile.name)}`, {
@@ -195,6 +199,7 @@ function isSwfFile(file) {
 }
 
 toolbarPlay.addEventListener("click", togglePlayback);
+previewStage.addEventListener("click", togglePlayback);
 firstFrameButton.addEventListener("click", () => goToFrame(0));
 prevFrameButton.addEventListener("click", () => goToFrame(Math.max(0, currentFrame - 1)));
 nextFrameButton.addEventListener("click", () => goToFrame(currentFrame + 1));
@@ -228,6 +233,9 @@ widthInput.addEventListener("input", markDirty);
 heightInput.addEventListener("input", markDirty);
 updatePreviewButton.addEventListener("click", applyPreviewEdits);
 saveJsonButton.addEventListener("click", saveCurrentAnimation);
+recentScrollLeftButton.addEventListener("click", () => scrollRecentGrid(-1));
+recentScrollRightButton.addEventListener("click", () => scrollRecentGrid(1));
+recentGrid.addEventListener("scroll", updateRecentScrollButtons);
 
 function clearWorkspace() {
   destroyPreviewAnimation();
@@ -244,14 +252,16 @@ function clearWorkspace() {
   workspace.hidden = true;
   outputPanel.hidden = true;
   outputJson.textContent = "";
+  if (bitmapStorageField) {
+    bitmapStorageField.hidden = false;
+  }
   bitmapStorageInput.value = "inline";
+  bitmapStorageInput.disabled = true;
   fpsInput.value = "";
   widthInput.value = "";
   heightInput.value = "";
   updatePreviewButton.disabled = true;
   saveJsonButton.disabled = true;
-  savedOutput.hidden = true;
-  savedOutput.textContent = "";
   status.hidden = true;
   status.textContent = "";
   frameSlider.min = "0";
@@ -260,6 +270,10 @@ function clearWorkspace() {
   frameInput.min = "1";
   frameInput.max = "1";
   frameInput.value = "1";
+  if (frameTotal) {
+    frameTotal.textContent = "/ 1";
+  }
+  updateRecentScrollButtons();
   previewStage.style.width = "";
   previewStage.style.height = "";
   if (previewSurface) {
@@ -283,9 +297,12 @@ function renderWorkspace() {
   fpsInput.value = formatNumber(currentWorkingAnimation.fr);
   widthInput.value = String(currentWorkingAnimation.w);
   heightInput.value = String(currentWorkingAnimation.h);
+  if (bitmapStorageField) {
+    bitmapStorageField.hidden = false;
+  }
+  bitmapStorageInput.disabled = currentBitmapAssets.length === 0;
   updatePreviewButton.disabled = true;
   saveJsonButton.disabled = false;
-  savedOutput.hidden = true;
   renderStatus();
   updateStageSize();
   syncFrameSlider();
@@ -411,6 +428,7 @@ function goToFrame(frame) {
 function updatePlaybackUi() {
   const frameNumber = currentFrame + 1;
   frameSlider.value = String(currentFrame);
+  updateFrameSliderProgress();
   frameInput.value = String(frameNumber);
 }
 
@@ -419,9 +437,13 @@ function syncFrameSlider() {
     frameSlider.min = "0";
     frameSlider.max = "0";
     frameSlider.value = "0";
+    updateFrameSliderProgress();
     frameInput.min = "1";
     frameInput.max = "1";
     frameInput.value = "1";
+    if (frameTotal) {
+      frameTotal.textContent = "/ 1";
+    }
     return;
   }
 
@@ -429,9 +451,21 @@ function syncFrameSlider() {
   frameSlider.min = "0";
   frameSlider.max = String(maxFrame);
   frameSlider.value = String(Math.min(currentFrame, maxFrame));
+  updateFrameSliderProgress();
   frameInput.min = "1";
   frameInput.max = String(maxFrame + 1);
   frameInput.value = String(Math.min(currentFrame, maxFrame) + 1);
+  if (frameTotal) {
+    frameTotal.textContent = `/ ${maxFrame + 1}`;
+  }
+}
+
+function updateFrameSliderProgress() {
+  const min = Number(frameSlider.min || "0");
+  const max = Number(frameSlider.max || "0");
+  const value = Number(frameSlider.value || "0");
+  const progress = max <= min ? 0 : ((value - min) / (max - min)) * 100;
+  frameSlider.style.setProperty("--slider-progress", `${progress}%`);
 }
 
 function applyFrameInput() {
@@ -562,9 +596,6 @@ async function saveCurrentAnimation() {
   renderRecentGrid();
 
   if (saveResult.cancelled) {
-    status.textContent = "Save cancelled.";
-    savedOutput.hidden = false;
-    savedOutput.textContent = "Save cancelled. Preview was added to recent saves.";
     return;
   }
 
@@ -585,23 +616,13 @@ async function saveCurrentAnimation() {
 
     const payload = await response.json();
     if (!response.ok || !payload.ok) {
-      status.textContent = payload.message ?? "Save log failed.";
-      savedOutput.hidden = false;
-      savedOutput.textContent = "Saved to chosen file. Logging to out/manual failed.";
       return;
     }
 
     record.size = payload.size ?? record.size;
     renderRecentGrid();
-
-    savedOutput.hidden = false;
-    savedOutput.textContent = saveResult.confirmed
-      ? `Saved to chosen file and logged at ${payload.output.json}`
-      : `File download started and logged at ${payload.output.json}. Preview was added to recent saves.`;
   } catch (error) {
-    status.textContent = error instanceof Error ? error.message : "Save log failed.";
-    savedOutput.hidden = false;
-    savedOutput.textContent = "Saved to chosen file. Logging to out/manual failed.";
+    return;
   }
 }
 
@@ -619,11 +640,6 @@ function renderRecentGrid() {
     const previewBox = document.createElement("div");
     previewBox.className = "recent-card-preview";
     card.append(previewBox);
-
-    const title = document.createElement("span");
-    title.className = "recent-card-title";
-    title.textContent = `${entry.name} - ${entry.size} bytes`;
-    card.append(title);
 
     const animation = window.lottie.loadAnimation({
       container: previewBox,
@@ -647,6 +663,27 @@ function renderRecentGrid() {
 
     recentGrid.append(card);
   }
+
+  requestAnimationFrame(() => {
+    updateRecentScrollButtons();
+  });
+}
+
+function scrollRecentGrid(direction) {
+  const scrollDistance = Math.max(220, Math.round(recentGrid.clientWidth * 0.75));
+  recentGrid.scrollBy({
+    left: direction * scrollDistance,
+    behavior: "smooth"
+  });
+}
+
+function updateRecentScrollButtons() {
+  const maxScrollLeft = Math.max(0, recentGrid.scrollWidth - recentGrid.clientWidth);
+  const atStart = recentGrid.scrollLeft <= 1;
+  const atEnd = recentGrid.scrollLeft >= maxScrollLeft - 1;
+
+  recentScrollLeftButton.disabled = atStart;
+  recentScrollRightButton.disabled = atEnd || maxScrollLeft <= 1;
 }
 
 function sanitizePositiveNumber(value, fallback) {

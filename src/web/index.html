@@ -23,104 +23,112 @@
       </section>
 
       <section id="workspace" class="workspace" hidden>
-        <div class="preview-column">
-          <div class="preview-frame">
-            <div id="preview-stage" class="preview-stage">
-              <div class="preview-surface" aria-label="Lottie preview">
-                <div class="preview-background" aria-hidden="true"></div>
-                <div class="preview-frame-line" aria-hidden="true"></div>
-                <div id="preview" class="preview-content"></div>
-              </div>
-            </div>
-            <div class="preview-toolbar">
-              <div class="toolbar-track-row">
-                <input id="frame-input" class="frame-input" type="number" min="1" step="1" value="1" aria-label="Current frame" />
-                <div class="toolbar-track">
-                  <input id="frame-slider" type="range" min="0" max="0" step="1" value="0" aria-label="Frame timeline" />
+        <section class="preview-panel">
+          <div class="preview-column">
+            <div class="preview-frame">
+              <div id="preview-stage" class="preview-stage">
+                <div class="preview-surface" aria-label="Lottie preview">
+                  <div class="preview-background" aria-hidden="true"></div>
+                  <div class="preview-frame-line" aria-hidden="true"></div>
+                  <div id="preview" class="preview-content"></div>
                 </div>
               </div>
-              <div class="toolbar-row">
-                <div class="toolbar-left">
-                  <div class="toolbar-buttons">
-                    <button id="first-frame" class="icon-button icon-only-button" type="button" aria-label="Go to start">
-                      <img class="button-icon" src="/icons/rewind.svg" alt="" />
-                    </button>
-                    <button id="prev-frame" class="icon-button icon-only-button" type="button" aria-label="Previous frame">
-                      <img class="button-icon" src="/icons/frame-step-back.svg" alt="" />
-                    </button>
-                    <button id="toolbar-play" class="icon-button icon-only-button play-button" type="button" aria-label="Toggle playback">
-                      <img id="toolbar-play-icon" class="button-icon" src="/icons/play.svg" alt="" />
-                    </button>
-                    <button id="next-frame" class="icon-button icon-only-button" type="button" aria-label="Next frame">
-                      <img class="button-icon" src="/icons/frame-step.svg" alt="" />
-                    </button>
-                    <button id="last-frame" class="icon-button icon-only-button" type="button" aria-label="Go to end">
-                      <img class="button-icon" src="/icons/go-end.svg" alt="" />
-                    </button>
+              <div class="preview-toolbar">
+                <div class="toolbar-track-row">
+                  <div class="frame-input-group">
+                    <input id="frame-input" class="frame-input" type="number" min="1" step="1" value="1" aria-label="Current frame" />
+                    <span id="frame-total" class="frame-total">/ 1</span>
+                  </div>
+                  <div class="toolbar-track">
+                    <input id="frame-slider" type="range" min="0" max="0" step="1" value="0" aria-label="Frame timeline" />
                   </div>
                 </div>
-                <div class="toolbar-buttons">
-                  <button id="zoom-out" class="icon-button" type="button" aria-label="Zoom out">
-                    <img class="button-icon" src="/icons/zoom-out.svg" alt="" />
-                    <span>Out</span>
-                  </button>
-                  <button id="zoom-reset" class="icon-button" type="button" aria-label="Reset zoom">
-                    <img class="button-icon" src="/icons/zoom-100.svg" alt="" />
-                    <span>100%</span>
-                  </button>
-                  <button id="zoom-in" class="icon-button" type="button" aria-label="Zoom in">
-                    <img class="button-icon" src="/icons/zoom-in.svg" alt="" />
-                    <span>In</span>
-                  </button>
-                  <button id="zoom-fit" class="icon-button" type="button" aria-label="Fit preview">
-                    <img class="button-icon" src="/icons/zoom-fit.svg" alt="" />
-                    <span>Fit</span>
-                  </button>
+                <div class="toolbar-row">
+                  <div class="toolbar-left">
+                    <div class="toolbar-buttons">
+                      <button id="first-frame" class="icon-button icon-only-button" type="button" aria-label="Go to start">
+                        <img class="button-icon" src="/icons/rewind.svg" alt="" />
+                      </button>
+                      <button id="prev-frame" class="icon-button icon-only-button" type="button" aria-label="Previous frame">
+                        <img class="button-icon" src="/icons/frame-step-back.svg" alt="" />
+                      </button>
+                      <button id="toolbar-play" class="icon-button icon-only-button play-button" type="button" aria-label="Toggle playback">
+                        <img id="toolbar-play-icon" class="button-icon" src="/icons/play.svg" alt="" />
+                      </button>
+                      <button id="next-frame" class="icon-button icon-only-button" type="button" aria-label="Next frame">
+                        <img class="button-icon" src="/icons/frame-step.svg" alt="" />
+                      </button>
+                      <button id="last-frame" class="icon-button icon-only-button" type="button" aria-label="Go to end">
+                        <img class="button-icon" src="/icons/go-end.svg" alt="" />
+                      </button>
+                    </div>
+                  </div>
+                  <div class="toolbar-buttons">
+                    <button id="zoom-out" class="icon-button" type="button" aria-label="Zoom out">
+                      <img class="button-icon" src="/icons/zoom-out.svg" alt="" />
+                      <span>Out</span>
+                    </button>
+                    <button id="zoom-reset" class="icon-button" type="button" aria-label="Reset zoom">
+                      <img class="button-icon" src="/icons/zoom-100.svg" alt="" />
+                      <span>100%</span>
+                    </button>
+                    <button id="zoom-in" class="icon-button" type="button" aria-label="Zoom in">
+                      <img class="button-icon" src="/icons/zoom-in.svg" alt="" />
+                      <span>In</span>
+                    </button>
+                    <button id="zoom-fit" class="icon-button" type="button" aria-label="Fit preview">
+                      <img class="button-icon" src="/icons/zoom-fit.svg" alt="" />
+                      <span>Fit</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-        </div>
+        </section>
 
         <aside class="properties-panel">
-          <section class="properties-card">
-            <h2>Properties</h2>
-            <div class="properties-fields">
-              <label class="field">
-                <span>bitmap storage</span>
-                <select id="bitmap-storage">
-                  <option value="inline">inline</option>
-                  <option value="external">external</option>
-                </select>
-              </label>
-              <label class="field">
-                <span>fps</span>
-                <input id="fps-input" type="number" min="1" step="0.01" autocomplete="off" />
-              </label>
-              <label class="field">
-                <span>width</span>
-                <input id="width-input" type="number" min="1" step="1" autocomplete="off" />
-              </label>
-              <label class="field">
-                <span>height</span>
-                <input id="height-input" type="number" min="1" step="1" autocomplete="off" />
-              </label>
-            </div>
-            <div class="property-actions">
-              <button id="update-preview" type="button" disabled>Update preview</button>
-              <button id="save-json" type="button" disabled>Save JSON</button>
-            </div>
-            <p id="saved-output" class="saved-output" hidden></p>
-          </section>
+          <h2>Properties</h2>
+          <div class="properties-fields">
+            <label class="field field-row">
+              <span>fps:</span>
+              <input id="fps-input" type="number" min="1" step="0.01" autocomplete="off" />
+            </label>
+            <label class="field field-row">
+              <span>width:</span>
+              <input id="width-input" type="number" min="1" step="1" autocomplete="off" />
+            </label>
+            <label class="field field-row">
+              <span>height:</span>
+              <input id="height-input" type="number" min="1" step="1" autocomplete="off" />
+            </label>
+          </div>
+          <div class="property-actions">
+            <button id="update-preview" type="button" disabled>Update preview</button>
+          </div>
+          <label id="bitmap-storage-field" class="field field-stack" hidden>
+            <span>Bitmap storage:</span>
+            <select id="bitmap-storage">
+              <option value="inline">inline</option>
+              <option value="external">external</option>
+            </select>
+          </label>
+          <div class="property-actions">
+            <button id="save-json" type="button" disabled>Download JSON</button>
+          </div>
         </aside>
       </section>
 
       <section class="recent-panel">
-        <div class="recent-header">
-          <h2>Recent saves</h2>
-          <p>Up to 12 most recent saved animations in this session.</p>
+        <div class="recent-carousel">
+          <button id="recent-scroll-left" class="icon-button icon-only-button recent-scroll-button" type="button" aria-label="Scroll recent saves left" disabled>
+            <img class="button-icon" src="/icons/scroll-left.svg" alt="" />
+          </button>
+          <div id="recent-grid" class="recent-grid"></div>
+          <button id="recent-scroll-right" class="icon-button icon-only-button recent-scroll-button" type="button" aria-label="Scroll recent saves right" disabled>
+            <img class="button-icon" src="/icons/scroll-right.svg" alt="" />
+          </button>
         </div>
-        <div id="recent-grid" class="recent-grid"></div>
       </section>
     </main>
     <div id="drop-overlay" class="drop-overlay" hidden>
