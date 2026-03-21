@@ -1,4 +1,4 @@
-import { cpSync, mkdirSync, rmSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, rmSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, extname, resolve } from "node:path";
 
 import { buildWebWorkerBundle } from "../src/server/build-web-worker.js";
@@ -64,6 +64,10 @@ function buildFixturesManifest(
   targetDir = fixturesDataDir,
   hrefBase = "./fixtures-data/"
 ): Array<{ name: string; size: number; href: string }> {
+  if (!existsSync(sourceDir)) {
+    return [];
+  }
+
   const filenames = readdirSync(sourceDir)
     .filter((filename) => filename.endsWith(".json"))
     .filter((filename) => !filename.endsWith(".meta.json"))
