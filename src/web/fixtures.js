@@ -1,5 +1,5 @@
 import { BUILD_LABEL } from "./build-info.js";
-import { prepareAnimationForLottieWeb } from "./lottie-preview-normalize.js";
+import { prepareAnimationForPreview } from "./lottie-preview-normalize.js";
 
 const gallery = document.getElementById("gallery");
 const buildBadge = document.getElementById("build-badge");
@@ -104,7 +104,7 @@ async function createFixtureCell(fixture, kindLabel) {
     renderer: "svg",
     loop: true,
     autoplay: false,
-    animationData: prepareAnimationForLottieWeb(animationData)
+    animationData: prepareAnimationForPreview(animationData)
   });
 
   animation.addEventListener("DOMLoaded", () => {

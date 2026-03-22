@@ -1,5 +1,5 @@
 import { BUILD_LABEL, BUILD_STAMP } from "./build-info.js";
-import { prepareAnimationForLottieWeb } from "./lottie-preview-normalize.js";
+import { prepareAnimationForPreview } from "./lottie-preview-normalize.js";
 
 const MIN_ZOOM = 0.05;
 const MAX_ZOOM = 24;
@@ -158,8 +158,9 @@ async function convertSelectedFile() {
 
     currentSourceName = selectedFile.name;
     currentIssues = payload.issues ?? [];
-    currentBaseAnimation = structuredClone(payload.animation);
-    currentWorkingAnimation = structuredClone(payload.animation);
+    const plainAnimation = toPlainData(payload.animation);
+    currentBaseAnimation = plainAnimation;
+    currentWorkingAnimation = structuredClone(plainAnimation);
     currentBitmapAssets = Array.isArray(payload.bitmapAssets) ? structuredClone(payload.bitmapAssets) : [];
     renderWorkspace();
   } catch (error) {
@@ -450,7 +451,7 @@ function createSerializableAnimation() {
   }
 
   const sourceAnimation = currentBaseAnimation ?? currentWorkingAnimation;
-  const serializableAnimation = structuredClone(sourceAnimation);
+  const serializableAnimation = toPlainData(sourceAnimation);
   serializableAnimation.fr = currentWorkingAnimation.fr;
   serializableAnimation.w = currentWorkingAnimation.w;
   serializableAnimation.h = currentWorkingAnimation.h;
@@ -469,13 +470,16 @@ function renderPreviewAnimation() {
     renderer: "svg",
     loop: true,
     autoplay: false,
-    animationData: prepareAnimationForLottieWeb(previewAnimationData)
+    animationData: prepareAnimationForPreview(previewAnimationData)
   });
 
   currentAnimationInstance.addEventListener("DOMLoaded", () => {
+    currentFrame = 0;
+    currentAnimationInstance?.goToAndStop(0, true);
+    isPlaying = false;
+    syncToolbarPlayIcon(false);
+    updatePlaybackUi();
     fitZoom();
-    goToFrame(0);
-    setPlayback(false);
   });
 
   currentAnimationInstance.addEventListener("enterFrame", () => {
@@ -769,7 +773,7 @@ function renderRecentGrid() {
       renderer: "svg",
       loop: true,
       autoplay: false,
-      animationData: prepareAnimationForLottieWeb(entry.animation)
+      animationData: prepareAnimationForPreview(entry.animation)
     });
 
     animation.addEventListener("DOMLoaded", () => {
@@ -843,6 +847,10 @@ function sanitizePositiveNumber(value, fallback) {
 function sanitizePositiveInteger(value, fallback) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function toPlainData(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 function toJsonFilename(name) {

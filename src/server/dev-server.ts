@@ -22,6 +22,7 @@ const staticFiles = new Map<string, { path: string; contentType: string }>([
   ["/", { path: resolve(webDir, "index.html"), contentType: "text/html; charset=utf-8" }],
   ["/app.js", { path: resolve(webDir, "app.js"), contentType: "text/javascript; charset=utf-8" }],
   ["/build-info.js", { path: resolve(webDir, "build-info.js"), contentType: "text/javascript; charset=utf-8" }],
+  ["/lottie-preview-normalize.js", { path: resolve(webDir, "lottie-preview-normalize.js"), contentType: "text/javascript; charset=utf-8" }],
   ["/convert-worker.js", { path: resolve(webBundleDir, "convert-worker.js"), contentType: "text/javascript; charset=utf-8" }],
   ["/convert-worker.js.map", { path: resolve(webBundleDir, "convert-worker.js.map"), contentType: "application/json; charset=utf-8" }],
   ["/styles.css", { path: resolve(webDir, "styles.css"), contentType: "text/css; charset=utf-8" }],

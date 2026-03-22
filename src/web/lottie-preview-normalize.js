@@ -1,68 +1,112 @@
-export function prepareAnimationForLottieWeb(animation) {
+export function prepareAnimationForPreview(animation) {
   const copy = structuredClone(animation);
-  normalizeValue(copy);
+  completeData(copy);
   return copy;
 }
 
-function normalizeValue(value) {
-  if (!value || typeof value !== "object") {
+function completeData(animation) {
+  if (!animation || typeof animation !== "object") {
     return;
   }
 
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      normalizeValue(item);
+  if (animation.__complete) {
+    return;
+  }
+
+  if (Array.isArray(animation.layers)) {
+    completeLayers(animation.layers, animation.assets ?? []);
+  }
+
+  animation.__complete = true;
+}
+
+function completeLayers(layers, assets) {
+  for (const layer of layers) {
+    if (!layer || typeof layer !== "object" || layer.completed) {
+      continue;
     }
-    return;
-  }
 
-  if (value.ty === "sh" && value.ks) {
-    normalizeShapeProperty(value.ks);
-  }
+    layer.completed = true;
 
-  for (const nested of Object.values(value)) {
-    normalizeValue(nested);
+    if (layer.hasMask && Array.isArray(layer.masksProperties)) {
+      for (const mask of layer.masksProperties) {
+        completeShapeProperty(mask?.pt);
+      }
+    }
+
+    if (layer.ty === 0) {
+      const refLayers = getAssetLayers(layer.refId, assets);
+      if (Array.isArray(refLayers)) {
+        completeLayers(refLayers, assets);
+      }
+      continue;
+    }
+
+    if (layer.ty === 4 && Array.isArray(layer.shapes)) {
+      completeShapes(layer.shapes);
+    }
   }
 }
 
-function normalizeShapeProperty(property) {
-  const keyframes = property.a === 1 && Array.isArray(property.k) ? property.k : null;
-  if (keyframes) {
-    for (const keyframe of keyframes) {
-      if (Array.isArray(keyframe.s)) {
-        for (const shape of keyframe.s) {
-          normalizeShapeGeometry(shape);
-        }
-      }
-
-      if (Array.isArray(keyframe.e)) {
-        for (const shape of keyframe.e) {
-          normalizeShapeGeometry(shape);
-        }
-      }
-    }
-    return;
+function getAssetLayers(refId, assets) {
+  const asset = assets.find((entry) => entry && entry.id === refId);
+  if (!asset || !Array.isArray(asset.layers)) {
+    return null;
   }
+  return asset.layers;
+}
 
-  if (property.k && typeof property.k === "object") {
-    normalizeShapeGeometry(property.k);
+function completeShapes(items) {
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+
+    if (item.ty === "sh") {
+      completeShapeProperty(item.ks);
+      continue;
+    }
+
+    if (item.ty === "gr" && Array.isArray(item.it)) {
+      completeShapes(item.it);
+    }
   }
 }
 
-function normalizeShapeGeometry(shape) {
+function completeShapeProperty(property) {
+  if (!property || typeof property !== "object") {
+    return;
+  }
+
+  if (property.k && property.k.i) {
+    completeShape(property.k);
+    return;
+  }
+
+  if (!Array.isArray(property.k)) {
+    return;
+  }
+
+  for (const keyframe of property.k) {
+    if (Array.isArray(keyframe?.s) && keyframe.s[0]) {
+      completeShape(keyframe.s[0]);
+    }
+    if (Array.isArray(keyframe?.e) && keyframe.e[0]) {
+      completeShape(keyframe.e[0]);
+    }
+  }
+}
+
+function completeShape(shape) {
   if (!shape || typeof shape !== "object" || !Array.isArray(shape.v) || !Array.isArray(shape.i) || !Array.isArray(shape.o)) {
     return;
   }
 
-  for (let index = 0; index < shape.v.length; index += 1) {
-    const vertex = shape.v[index];
-    const inTangent = shape.i[index];
-    const outTangent = shape.o[index];
-    if (!Array.isArray(vertex) || !Array.isArray(inTangent) || !Array.isArray(outTangent)) {
-      continue;
-    }
-
-    shape.i[index] = [vertex[0] + inTangent[0], vertex[1] + inTangent[1]];
-    shape.o[index] = [vertex[0] + outTangent[0], vertex[1] + outTangent[1]];
+  for (let index = 0; index < shape.i.length; index += 1) {
+    shape.i[index][0] += shape.v[index][0];
+    shape.i[index][1] += shape.v[index][1];
+    shape.o[index][0] += shape.v[index][0];
+    shape.o[index][1] += shape.v[index][1];
   }
 }
