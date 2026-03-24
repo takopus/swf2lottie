@@ -12,6 +12,7 @@ const port = Number.parseInt(process.env.PORT ?? "4173", 10);
 const rootDir = resolve(process.cwd());
 const webDir = resolve(rootDir, "src", "web");
 const iconsDir = resolve(webDir, "icons");
+const faviconDir = resolve(webDir, "favicon");
 const webBundleDir = resolve(rootDir, webBundleDirName);
 const outDir = resolve(rootDir, "out", "manual");
 const fixturesOutDir = resolve(rootDir, "out");
@@ -96,7 +97,11 @@ createServer(async (request, response) => {
     }
 
     if (request.method === "GET") {
-      if (serveIconAsset(url.pathname, response)) {
+      if (serveScopedAsset(url.pathname, "/icons/", iconsDir, response)) {
+        return;
+      }
+
+      if (serveScopedAsset(url.pathname, "/favicon/", faviconDir, response)) {
         return;
       }
 
@@ -128,18 +133,18 @@ function serveStatic(pathname: string, response: ServerResponse): boolean {
   return true;
 }
 
-function serveIconAsset(pathname: string, response: ServerResponse): boolean {
-  if (!pathname.startsWith("/icons/")) {
+function serveScopedAsset(pathname: string, routePrefix: string, baseDir: string, response: ServerResponse): boolean {
+  if (!pathname.startsWith(routePrefix)) {
     return false;
   }
 
-  const relativePath = pathname.slice("/icons/".length).replaceAll("\\", "/");
+  const relativePath = pathname.slice(routePrefix.length).replaceAll("\\", "/");
   if (!relativePath || relativePath.includes("..")) {
     return false;
   }
 
-  const assetPath = resolve(iconsDir, relativePath);
-  if (!assetPath.startsWith(iconsDir)) {
+  const assetPath = resolve(baseDir, relativePath);
+  if (!assetPath.startsWith(baseDir)) {
     return false;
   }
 

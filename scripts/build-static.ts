@@ -7,6 +7,7 @@ export const rootDir = resolve(process.cwd());
 export const outputDir = resolve(rootDir, "dist-static");
 const webDir = resolve(rootDir, "src", "web");
 const iconsDir = resolve(webDir, "icons");
+const faviconDir = resolve(webDir, "favicon");
 const fixturesOutDir = resolve(rootDir, "out");
 const fixturesWebOutDir = resolve(rootDir, "out-web");
 const vendorDir = resolve(outputDir, "vendor");
@@ -37,6 +38,7 @@ export async function buildStaticSite(): Promise<void> {
   copyWebFile("fixtures.css");
 
   cpSync(iconsDir, resolve(outputDir, "icons"), { recursive: true });
+  cpSync(faviconDir, resolve(outputDir, "favicon"), { recursive: true });
   cpSync(lottiePlayerPath, resolve(vendorDir, "lottie.min.js"));
   cpSync(workerPath, resolve(outputDir, "convert-worker.js"));
   cpSync(`${workerPath}.map`, resolve(outputDir, "convert-worker.js.map"));
