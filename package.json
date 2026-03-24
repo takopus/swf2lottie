@@ -1,7 +1,8 @@
 {
   "name": "swf2lottie",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "private": true,
+  "license": "MIT",
   "description": "Deterministic SWF to Lottie converter for a strict subset of Flash vector timelines.",
   "type": "module",
   "scripts": {

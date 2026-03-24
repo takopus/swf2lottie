@@ -6,12 +6,14 @@ export interface SwfTag {
 }
 
 export interface SwfPlaceObjectTag {
-  code: 26;
+  code: 26 | 70;
   depth: number;
   hasMove: boolean;
   characterId?: number;
   ratio?: number;
   clipDepth?: number;
+  hasFilterList?: boolean;
+  blendMode?: number;
   matrix?: {
     a: number;
     b: number;

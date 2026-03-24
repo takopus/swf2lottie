@@ -150,8 +150,89 @@ function buildTimeline(
   const displayList = new Map<number, DisplayListEntry>();
   let frameIndex = 0;
   let autoInstanceCounter = 0;
+  let reportedText = false;
+  let reportedActions = false;
+  let reportedAudio = false;
+  let reportedVideo = false;
+  const reportedFilterDepths = new Set<number>();
+  const reportedBlendDepths = new Set<number>();
 
   for (const tag of tags) {
+    if (!reportedText && isTextTag(tag)) {
+      issues.push({
+        code: "unsupported_feature",
+        severity: "warning",
+        message: "Text fields are not supported. Convert text to shapes before exporting.",
+        path: timelineId,
+        details: {
+          tag: tagName(tag)
+        }
+      });
+      reportedText = true;
+    }
+
+    if (!reportedActions && isActionTag(tag)) {
+      issues.push({
+        code: "unsupported_feature",
+        severity: "warning",
+        message: "ActionScript is not supported and will be ignored.",
+        path: timelineId,
+        details: {
+          tag: tagName(tag)
+        }
+      });
+      reportedActions = true;
+    }
+
+    if (!reportedAudio && isSoundTag(tag)) {
+      issues.push({
+        code: "unsupported_feature",
+        severity: "warning",
+        message: "Audio is not supported and will be ignored.",
+        path: timelineId,
+        details: {
+          tag: tagName(tag)
+        }
+      });
+      reportedAudio = true;
+    }
+
+    if (!reportedVideo && isVideoTag(tag)) {
+      issues.push({
+        code: "unsupported_feature",
+        severity: "warning",
+        message: "Video is not supported and will be ignored.",
+        path: timelineId,
+        details: {
+          tag: tagName(tag)
+        }
+      });
+      reportedVideo = true;
+    }
+
+    if (isPlaceObjectTag(tag) && tag.hasFilterList && !reportedFilterDepths.has(tag.depth)) {
+      issues.push({
+        code: "unsupported_feature",
+        severity: "warning",
+        message: "Filters are not supported and will be ignored.",
+        path: `${timelineId}.depth:${tag.depth}`
+      });
+      reportedFilterDepths.add(tag.depth);
+    }
+
+    if (isPlaceObjectTag(tag) && tag.blendMode !== undefined && tag.blendMode > 1 && !reportedBlendDepths.has(tag.depth)) {
+      issues.push({
+        code: "unsupported_feature",
+        severity: "warning",
+        message: "Blend modes are not supported and will be ignored.",
+        path: `${timelineId}.depth:${tag.depth}`,
+        details: {
+          blendMode: tag.blendMode
+        }
+      });
+      reportedBlendDepths.add(tag.depth);
+    }
+
     if (tag.code === 1) {
       frames.push({
         index: frameIndex,
@@ -432,11 +513,31 @@ function isJpegTablesTag(tag: SwfControlTag): tag is SwfJpegTablesTag {
 }
 
 function isPlaceObjectTag(tag: SwfControlTag): tag is SwfPlaceObjectTag {
-  return tag.code === 26;
+  return tag.code === 26 || tag.code === 70;
 }
 
 function isRemoveObject2Tag(tag: SwfControlTag): tag is SwfRemoveObject2Tag {
   return tag.code === 28;
+}
+
+function isTextTag(tag: SwfControlTag): tag is SwfTag {
+  return tag.code === 11 || tag.code === 33 || tag.code === 37;
+}
+
+function isActionTag(tag: SwfControlTag): tag is SwfTag {
+  return tag.code === 12 || tag.code === 59 || tag.code === 82;
+}
+
+function isSoundTag(tag: SwfControlTag): tag is SwfTag {
+  return tag.code === 14 || tag.code === 15 || tag.code === 18 || tag.code === 19 || tag.code === 45 || tag.code === 89;
+}
+
+function isVideoTag(tag: SwfControlTag): tag is SwfTag {
+  return tag.code === 60 || tag.code === 61;
+}
+
+function tagName(tag: SwfControlTag): string {
+  return "name" in tag && typeof tag.name === "string" ? tag.name : `Tag${tag.code}`;
 }
 
 function rgbToHex(red: number, green: number, blue: number): string {

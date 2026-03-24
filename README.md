@@ -2,11 +2,15 @@
 
 ## Disclaimer
 
-This project is entirely coded by OpenAI Codex. I did not even read the code yet. I give no warranties of any kind, project is provided as is. It currently in a working, but very early state.
+This project is entirely coded with OpenAI Codex. I did not even read the code yet. I give no warranties of any kind, project is provided as is. It currently in a working, but still early state.
+
+## TL;DR
+
+Open https://github.com/takopus/swf2lottie, stick your bare SWF animation there and get Lottie JSON out. Have fun!
 
 ## Description
 
-`swf 2 lottie` is a deterministic converter from a strict subset of Adobe Flash Player 10.3 `SWF` files to `Lottie`.
+`swf 2 lottie` is a deterministic converter from a strict subset of Adobe Flash Player `SWF` files to `Lottie`.
 
 The project is intentionally narrow:
 
@@ -45,7 +49,7 @@ The current implementation already includes:
 Supported on the current branch:
 
 - nested display object timelines;
-- motion tween style transform animation exported as `Lottie` keyframes;
+- motion tween and classic tween style transform animation exported as `Lottie` keyframes;
 - shape tween / morph shape animation;
 - bitmap assets and bitmap-filled shapes;
 - solid fills;
@@ -57,7 +61,8 @@ Supported on the current branch:
 
 Still intentionally out of scope and probably never will be supported:
 
-- audio;
+- audio and video;
+- texts;
 - ActionScript / runtime code;
 - filters, blend modes and other renderer-specific effects;
 - heuristic reconstruction of unsupported Flash features.
@@ -139,7 +144,7 @@ The static build is intended to be served over ordinary HTTP by any simple stati
 
 ## Exporting fixture output
 
-To generate JSON results for every file from `fixtures/`, run:
+To generate JSON results for every SWF file from `fixtures/`, run:
 
 ```bash
 npm run export:fixtures

@@ -15,7 +15,7 @@
             <span>Choose SWF file or drop it anywhere</span>
           </label>
         </div>
-        <button id="about-button" class="about-button" type="button">About</button>
+        <button id="about-button" class="about-button" type="button">?</button>
         <div id="status" class="status" hidden></div>
       </section>
 
@@ -144,6 +144,33 @@
       <div class="about-dialog" role="dialog" aria-modal="true" aria-labelledby="about-title">
         <button id="about-close" class="about-close" type="button" aria-label="Close about">×</button>
         <h2 id="about-title">swf 2 lottie</h2>
+        <p>Swf 2 lottie is a vibecoded tool to convert Adobe Flash / Animate SWF files to Lottie JSON format.</p>
+        <p>I made it 'cause I needed some short animations for my other project and God knows I hate to grind SWFs through After Effects! So, for now it seems it fully meets my needs.</p>
+        <p>For full details and instructions on how to run in locally, please see README.md in the GitHub repository for more details and examples: <a href="https://github.com/takopus/swf2lottie" target="_blank" rel="noopener">https://github.com/takopus/swf2lottie</a></p>
+        <p><b>Disclaimer</b>: This is a hobby project and not affiliated with Adobe or Lottie. It was vibecoded to life, I never dug deep into the code and give no guarantees it won't install some backdoor for future AI masters, if you clone and use it locally!</p><br />
+        <p>Supported features:
+          <ul>
+            <li>Vector shapes: fills and outlines, including (most) line styles and linear and radial gradients;</li>
+            <li>Basic transformation: rotation, scaling, skewing;</li>
+            <li>Movie clips and nested symbols - your usual scene hierarchy;</li>
+            <li>Classic and motion tweens;</li>
+            <li>Shape tweens;</li>
+            <li>Bitmaps, except for bitmap outlines and some other rare cases.</li>            
+          </ul>
+        </p><br />
+        <p>Unsupported features:
+          <ul>
+            <li>Text fields. Convert them to shapes by breaking apart;</li>
+            <li>Sound and video;</li>
+            <li>ActionScript and interactivity;</li>
+            <li>3D transforms;</li>
+            <li>Filters and blend modes;</li>
+            <li>Everything else outside the supported features.</li>
+          </ul>
+        </p><br />
+        <p>I seriously doubt it will work with no bugs. If you encounter any, please try to refine it to a minimal test case and report an issue in the GitHub repository with FLA / SWF files. I will try to feed it into my trusted OpenAI Codex, if I still have access to it by that time. Thanks!</p>
+        <p>I also thought about making Adobe Animate IDE extension for this tool, but it seems JSFL still more dead than alive, so you'll have to stick with web service, at least for now. If anyone want to try their hand at it, feel free to do so - Codex says it won't be that hard on this project's side, but may require a lot of luck and nerves on JSFL end.</p>
+        <p>Have fun making web animations the way they meant to be made, in an IDE designed specifically for that purpose, and not in the, you know, After Effects!</p>
       </div>
     </div>
     <div id="build-badge" class="build-badge" aria-hidden="true"></div>

@@ -86,6 +86,8 @@ function readTag(buffer: ArrayBuffer, code: number, length: number, bodyOffset: 
       return readBackgroundColorTag(buffer, bodyOffset);
     case 26:
       return readPlaceObject2Tag(buffer, bodyOffset);
+    case 70:
+      return readPlaceObject3Tag(buffer, bodyOffset);
     case 28:
       return readRemoveObject2Tag(buffer, bodyOffset);
     case 39:
@@ -291,6 +293,107 @@ function readPlaceObject2Tag(buffer: ArrayBuffer, bodyOffset: number): SwfPlaceO
     ...(characterId !== undefined ? { characterId } : {}),
     ...(ratio !== undefined ? { ratio } : {}),
     ...(clipDepth !== undefined ? { clipDepth } : {}),
+    ...(matrix
+      ? {
+          matrix: {
+            a: matrix.a,
+            b: matrix.b,
+            c: matrix.c,
+            d: matrix.d,
+            tx: matrix.tx,
+            ty: matrix.ty
+          }
+        }
+      : {}),
+    ...(colorTransform
+      ? {
+          colorTransform: {
+            redMultiplier: colorTransform.redMultiplier,
+            greenMultiplier: colorTransform.greenMultiplier,
+            blueMultiplier: colorTransform.blueMultiplier,
+            alphaMultiplier: colorTransform.alphaMultiplier,
+            redAdd: colorTransform.redAdd,
+            greenAdd: colorTransform.greenAdd,
+            blueAdd: colorTransform.blueAdd,
+            alphaAdd: colorTransform.alphaAdd
+          }
+        }
+      : {}),
+    ...(name ? { name: name.value } : {})
+  };
+}
+
+function readPlaceObject3Tag(buffer: ArrayBuffer, bodyOffset: number): SwfPlaceObjectTag {
+  const reader = new BinaryReader(buffer);
+  reader.skip(bodyOffset);
+
+  const flags = reader.readUi8();
+  const flags2 = reader.readUi8();
+  const hasClipActions = (flags & 0b1000_0000) !== 0;
+  const hasClipDepth = (flags & 0b0100_0000) !== 0;
+  const hasName = (flags & 0b0010_0000) !== 0;
+  const hasRatio = (flags & 0b0001_0000) !== 0;
+  const hasColorTransform = (flags & 0b0000_1000) !== 0;
+  const hasMatrix = (flags & 0b0000_0100) !== 0;
+  const hasCharacter = (flags & 0b0000_0010) !== 0;
+  const hasMove = (flags & 0b0000_0001) !== 0;
+  const hasFilterList = (flags2 & 0b0000_0001) !== 0;
+  const hasBlendMode = (flags2 & 0b0000_0010) !== 0;
+  const hasCacheAsBitmap = (flags2 & 0b0000_0100) !== 0;
+  const hasClassName = (flags2 & 0b0000_1000) !== 0;
+  const hasImage = (flags2 & 0b0001_0000) !== 0;
+
+  const depth = reader.readUi16();
+  const className = hasClassName || (hasImage && hasCharacter) ? readSwfString(buffer, reader.position) : undefined;
+  if (className) {
+    reader.skip(className.byteLength);
+  }
+
+  const characterId = hasCharacter ? reader.readUi16() : undefined;
+  const matrix = hasMatrix ? readMatrix(buffer, reader.position) : undefined;
+  if (matrix) {
+    reader.skip(matrix.byteLength);
+  }
+
+  const colorTransform = hasColorTransform ? readColorTransformWithAlpha(buffer, reader.position) : undefined;
+  if (colorTransform) {
+    reader.skip(colorTransform.byteLength);
+  }
+
+  const ratio = hasRatio ? reader.readUi16() : undefined;
+  const name = hasName ? readSwfString(buffer, reader.position) : undefined;
+  if (name) {
+    reader.skip(name.byteLength);
+  }
+
+  const clipDepth = hasClipDepth ? reader.readUi16() : undefined;
+  let blendMode: number | undefined;
+
+  if (hasFilterList) {
+    // Filter list is intentionally not parsed yet. The caller receives a flag and can warn.
+  }
+
+  if (hasBlendMode) {
+    blendMode = reader.readUi8();
+  }
+
+  if (hasCacheAsBitmap) {
+    reader.readUi8();
+  }
+
+  if (hasClipActions) {
+    throw new Error("PlaceObject3 clip actions are not supported yet.");
+  }
+
+  return {
+    code: 70,
+    depth,
+    hasMove,
+    ...(characterId !== undefined ? { characterId } : {}),
+    ...(ratio !== undefined ? { ratio } : {}),
+    ...(clipDepth !== undefined ? { clipDepth } : {}),
+    ...(hasFilterList ? { hasFilterList: true } : {}),
+    ...(blendMode !== undefined ? { blendMode } : {}),
     ...(matrix
       ? {
           matrix: {

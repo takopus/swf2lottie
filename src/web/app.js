@@ -151,8 +151,7 @@ async function convertSelectedFile() {
     const payload = await convertSelectedFileInWorker(selectedFile);
     if (!payload.ok || !payload.animation) {
       destroyPreviewAnimation();
-      outputPanel.hidden = true;
-      setStatusMessage(payload.message ?? "Conversion failed.", "error");
+      showConversionFailure(payload.message ?? "Conversion failed.", payload.issues ?? []);
       return;
     }
 
@@ -442,6 +441,23 @@ function renderStatus() {
   `;
   outputPanel.hidden = !hasIssues;
   outputJson.textContent = hasIssues ? formatIssues(currentIssues) : "";
+  syncWorkspaceHeight();
+}
+
+function showConversionFailure(message, issues = []) {
+  currentIssues = Array.isArray(issues) ? issues : [];
+  status.hidden = false;
+  const warningCount = currentIssues.filter((issue) => issue.severity === "warning").length;
+  const errorCount = currentIssues.filter((issue) => issue.severity === "error").length;
+  const sourceLabel = currentSourceName ?? selectedFile?.name ?? "source file";
+
+  status.innerHTML = `
+    <span class="status-summary">${escapeHtml(message)} ${escapeHtml(sourceLabel)}.</span>
+    ${formatIssueCountsHtml(warningCount, errorCount)}
+  `;
+
+  outputPanel.hidden = currentIssues.length === 0;
+  outputJson.textContent = currentIssues.length > 0 ? formatIssues(currentIssues) : "";
   syncWorkspaceHeight();
 }
 
