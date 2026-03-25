@@ -1003,7 +1003,7 @@ function exportShapePaths(
 ): Record<string, unknown>[] {
   const exported: Record<string, unknown>[] = [];
 
-  for (const group of groupPathsByStyle(paths)) {
+  for (const group of orderShapeStyleGroupsForLottie(groupPathsByStyle(paths))) {
     const items: Record<string, unknown>[] = group.paths.map((path) =>
       sourceSamples && needsBakedMatrix(sourceSamples)
         ? bakePathAnimation(path, sourceSamples)
@@ -1075,7 +1075,7 @@ function exportStaticMorphProxyShapes(
   const morphFillGroups = groupMorphPathsByStyle(morphFillPaths);
   const morphStrokeGroups = groupMorphPathsByStyle(morphStrokePaths);
 
-  for (const group of groupPathsByStyle(successorPaths)) {
+  for (const group of orderShapeStyleGroupsForLottie(groupPathsByStyle(successorPaths))) {
     const matchedMorphFillGroup = group.fill
       ? findBestMatchingMorphGroupForProxy(group, morphFillGroups)
       : null;
@@ -1326,7 +1326,7 @@ function exportShapeTrackWithBitmapFills(
   bitmapAssetMode: BitmapAssetMode,
   bitmapAssetBasePath: string
 ): Record<string, unknown>[] {
-  const groups = groupPathsByStyle(symbol.paths);
+  const groups = orderShapeStyleGroupsForLottie(groupPathsByStyle(symbol.paths));
   const layerSpecs: LayerExportSpec[] = [];
 
   for (const group of groups) {
@@ -1521,25 +1521,29 @@ function exportBitmapFillClipMasks(
 }
 
 function groupPathsByStyle(paths: FlashShapePath[]): ShapeStyleGroup[] {
-  const groups = new Map<string, ShapeStyleGroup>();
+  const groups: ShapeStyleGroup[] = [];
+  let currentGroup: ShapeStyleGroup | null = null;
+  let currentKey: string | null = null;
 
   for (const [index, path] of paths.entries()) {
     const groupKey = `${path.fill ? JSON.stringify(path.fill) : "none"}|${path.stroke ? JSON.stringify(path.stroke) : "none"}`;
-    const existing = groups.get(groupKey);
-    if (existing) {
-      existing.paths.push(path);
+
+    if (currentGroup && currentKey === groupKey && pathCanShareStyleGroup(path, currentGroup.paths)) {
+      currentGroup.paths.push(path);
       continue;
     }
 
-    groups.set(groupKey, {
+    currentGroup = {
       index,
       fill: path.fill,
       stroke: path.stroke,
       paths: [path]
-    });
+    };
+    currentKey = groupKey;
+    groups.push(currentGroup);
   }
 
-  return [...groups.values()].sort((left, right) => left.index - right.index);
+  return groups;
 }
 
 function groupMorphPathsByStyle(paths: FlashMorphShapePath[]): MorphShapeStyleGroup[] {
@@ -1573,6 +1577,63 @@ function groupMorphPathsByStyle(paths: FlashMorphShapePath[]): MorphShapeStyleGr
   }
 
   return [...groups.values()].sort((left, right) => left.index - right.index);
+}
+
+function orderShapeStyleGroupsForLottie(groups: ShapeStyleGroup[]): ShapeStyleGroup[] {
+  return groups.slice();
+}
+
+function pathCanShareStyleGroup(path: FlashShapePath, groupedPaths: FlashShapePath[]): boolean {
+  if (path.stroke) {
+    return true;
+  }
+
+  const candidateBounds = geometryBounds(path.geometry);
+  return groupedPaths.some((groupedPath) => boundsOverlapOrContain(candidateBounds, geometryBounds(groupedPath.geometry)));
+}
+
+function geometryBounds(geometry: FlashShapePath["geometry"]): { minX: number; minY: number; maxX: number; maxY: number } {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  for (const [x, y] of geometry.vertices) {
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  }
+
+  return { minX, minY, maxX, maxY };
+}
+
+function boundsOverlapOrContain(
+  left: { minX: number; minY: number; maxX: number; maxY: number },
+  right: { minX: number; minY: number; maxX: number; maxY: number }
+): boolean {
+  const overlaps = left.minX <= right.maxX &&
+    left.maxX >= right.minX &&
+    left.minY <= right.maxY &&
+    left.maxY >= right.minY;
+
+  if (overlaps) {
+    return true;
+  }
+
+  const leftContainsRight = left.minX <= right.minX &&
+    left.maxX >= right.maxX &&
+    left.minY <= right.minY &&
+    left.maxY >= right.maxY;
+  if (leftContainsRight) {
+    return true;
+  }
+
+  const rightContainsLeft = right.minX <= left.minX &&
+    right.maxX >= left.maxX &&
+    right.minY <= left.minY &&
+    right.maxY >= left.maxY;
+  return rightContainsLeft;
 }
 
 function exportMaskProperties(
@@ -3630,23 +3691,7 @@ function lineJoinToLottie(lineJoin: FlashSolidStroke["lineJoin"]): number {
 }
 
 function sortShapeGroups(groups: Record<string, unknown>[]): Record<string, unknown>[] {
-  return groups.slice().sort((left, right) => shapeGroupPriority(left) - shapeGroupPriority(right));
-}
-
-function shapeGroupPriority(group: Record<string, unknown>): number {
-  const items = Array.isArray(group.it) ? group.it as Array<Record<string, unknown>> : [];
-  const hasStroke = items.some((item) => item.ty === "st");
-  const hasFill = items.some((item) => item.ty === "fl" || item.ty === "gf");
-
-  if (hasStroke && !hasFill) {
-    return 0;
-  }
-
-  if (hasStroke && hasFill) {
-    return 1;
-  }
-
-  return 2;
+  return groups.slice().reverse();
 }
 
 function compareLayerSpecPriority(left: LayerExportSpec, right: LayerExportSpec): number {
